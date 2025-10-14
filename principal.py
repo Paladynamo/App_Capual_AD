@@ -5,6 +5,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import tkinter as tk
 from tkinter import messagebox, ttk, simpledialog
+import sys
 
 # ==============================
 # CONFIGURACIÓN DE CONEXIÓN LDAP
@@ -15,6 +16,26 @@ BASE_DN = 'DC=capual,DC=cl'
 # ==============================
 # FUNCIONES DE INTERFAZ
 # ==============================
+
+def despedida():
+    """Mensaje de despedida final."""
+    messagebox.showinfo(
+        "Despedida",
+        "Gracias por usar esta aplicación.\n"
+        "App creada por Eduardo 'PaladynamoX' Lizama C.\n"
+        "Versión 1.0.0 - Año 2025"
+    )
+    sys.exit(0)
+
+
+def confirmar_salida(ventana):
+    """Confirma si el usuario desea cerrar la app."""
+    respuesta = messagebox.askyesno("Confirmar salida", "¿Deseas salir del programa?")
+    if respuesta:
+        despedida()
+    else:
+        ventana.deiconify()  # Restaura la ventana si se había minimizado o cerrado temporalmente
+
 
 def centrar_ventana(ventana, ancho, alto):
     """Centrar una ventana en la pantalla"""
@@ -39,6 +60,8 @@ def seleccionar_usuario():
     root_sel.title("Bienvenido - App creada por Eduardo 'PaladynamoX' Lizama C.")
     centrar_ventana(root_sel, 400, 240)
     root_sel.resizable(False, False)
+
+    root_sel.protocol("WM_DELETE_WINDOW", lambda: confirmar_salida(root_sel))
 
     label_bienvenida = ttk.Label(root_sel, text="👋 ¡Bienvenido al sistema de supervisión!", font=("Segoe UI", 11))
     label_bienvenida.pack(pady=10)
@@ -82,6 +105,7 @@ def conectar_ad():
 
         temp_root = tk.Tk()
         temp_root.withdraw()
+        temp_root.protocol("WM_DELETE_WINDOW", lambda: confirmar_salida(temp_root))
         AD_PASSWORD = simpledialog.askstring(
             "Credenciales AD",
             f"🔑 Ingresa la contraseña de {AD_USER}:",
@@ -196,8 +220,7 @@ Capual - Cooperativa de Ahorro y Crédito
         dias_aviso = pedir_dias_aviso()
         refrescar_callback(dias_aviso)
     else:
-        messagebox.showinfo("Despedida", "Gracias por usar esta aplicación.\nApp creada por Eduardo 'PaladynamoX' Lizama C.\nVersión 1.0.0 - Año 2025")
-        root.destroy()
+        despedida()
 
 
 # ==============================
@@ -231,6 +254,8 @@ def mostrar_ventana_principal(conn, dias_aviso):
     root = tk.Tk()
     root.title("Usuarios con contraseña próxima a expirar - App PaladynamoX v1.0.0")
     centrar_ventana(root, 950, 420)
+
+    root.protocol("WM_DELETE_WINDOW", lambda: confirmar_salida(root))
 
     frame = ttk.Frame(root)
     frame.pack(fill="both", expand=True, padx=10, pady=10)
