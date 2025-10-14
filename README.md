@@ -51,8 +51,8 @@ Instala las librerías necesarias con:
 
 📨 Contacto
 
-Creado por Eduardo “PaladynamoX” Lizama C.
-💼 Cooperativa Capual - Departamento de Soporte TI
+Creado por Eduardo “PaladynamoX” Lizama C. <br>
+💼 Cooperativa Capual - Departamento de Soporte TI <br>
 📧 Contacto: eduardo.1994.arte@gmail.com
 
 ---
