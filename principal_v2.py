@@ -4,6 +4,7 @@ from datetime import datetime
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.image import MIMEImage
 import tkinter as tk
 from tkinter import messagebox, ttk, simpledialog
 import sys
@@ -132,36 +133,62 @@ def enviar_correos_lista(usuarios):
         server.starttls()
         server.login(SMTP_REMITENTE, SMTP_PASSWORD)
         enviado_count = 0
+
+        # Ruta a tu imagen (ajusta si el archivo está en otra ubicación)
+        ruta_imagen = "img_teclas.png"
+
         for u in usuarios:
             if u.get("correo") and "@" in u.get("correo"):
-                msg = MIMEMultipart()
+                msg = MIMEMultipart("related")
                 msg["From"] = SMTP_REMITENTE
                 msg["To"] = u["correo"]
                 msg["Subject"] = "⚠️ Aviso: Tu contraseña está próxima a expirar"
 
-                body = f"""Estimado/a {u['nombre']},
+                # --- Cuerpo HTML con la imagen embebida ---
+                html_body = f"""
+                <html>
+                <body style="font-family:Segoe UI, sans-serif; color:#333;">
+                    <p>Estimado/a <b>{u['nombre']}</b>,</p>
+                    <p>Tu contraseña expira en <b>{u['dias']} días</b> (el {u['expira']}).<br>
+                    Por favor, actualízala antes de que caduque para evitar bloqueos de acceso.</p>
 
-Tu contraseña expira en {u['dias']} días (el {u['expira']}).
-Por favor, actualízala antes de que caduque para evitar bloqueos de acceso.
+                    <p><b>Para cambiar tu contraseña:</b><br>
+                    Presiona <i>Ctrl + Alt + Supr</i> y selecciona la opción "Cambiar contraseña".</p>
 
-Para cambiar tu contraseña:
-Presiona Ctrl + Alt + Supr y selecciona la opción "Cambiar contraseña".
+                    <p style="text-align:center;">
+                        <img src="cid:img_teclas" alt="Instrucciones Ctrl+Alt+Supr" width="420">
+                    </p>
 
-Si tienes problemas, comunícate con:
-- Eduardo L. (Nexo 4006)
-- Ignacio C. (Nexo 4018)
-Departamento de Servicios TI
+                    <p>Si tienes problemas, comunícate con:<br>
+                    - Eduardo L. (Nexo 4006)<br>
+                    - Ignacio C. (Nexo 4018)<br>
+                    Departamento de Servicios TI</p>
 
-🏢 Departamento: {u['departamento'] or 'No especificado'}
-👤 Usuario: {u['usuario']}
+                    <p>🏢 Departamento: {u['departamento'] or 'No especificado'}<br>
+                    👤 Usuario: {u['usuario']}</p>
 
-Saludos cordiales,
-Departamento de Soporte TI
-Capual - Cooperativa de Ahorro y Crédito
-"""
-                msg.attach(MIMEText(body, "plain"))
+                    <p>Saludos cordiales,<br>
+                    <b>Departamento de Soporte TI</b><br>
+                    Capual - Cooperativa de Ahorro y Crédito</p>
+                </body>
+                </html>
+                """
+
+                msg.attach(MIMEText(html_body, "html"))
+
+                # --- Adjuntar imagen embebida ---
+                try:
+                    with open(ruta_imagen, "rb") as f:
+                        img = MIMEImage(f.read())
+                        img.add_header("Content-ID", "<img_teclas>")
+                        img.add_header("Content-Disposition", "inline", filename="img_teclas.png")
+                        msg.attach(img)
+                except FileNotFoundError:
+                    print(f"⚠️ Imagen {ruta_imagen} no encontrada, se enviará sin imagen.")
+
                 server.send_message(msg)
                 enviado_count += 1
+
         server.quit()
         messagebox.showinfo("Envío finalizado", f"Correos enviados: {enviado_count}")
         return True
@@ -187,17 +214,27 @@ def ventana_login():
     frm = ttk.Frame(login_win, padding=12)
     frm.pack(fill="both", expand=True)
 
-    ttk.Label(frm, text="Usuario (sAMAccountName o user@dominio):").pack(anchor="w", pady=(6,0))
-    usuario_entry = ttk.Entry(frm, width=40)
-    usuario_entry.pack(pady=2)
+    # --- columnas y filas base ---
+    frm.columnconfigure(0, weight=0)
+    frm.columnconfigure(1, weight=1)
+
+    # --- usuario y contraseña ---
+    ttk.Label(frm, text="Usuario: ").grid(row=0, column=0, sticky="e", pady=(8,4), padx=(4,4))
+    usuario_entry = ttk.Entry(frm, width=35)
+    usuario_entry.grid(row=0, column=1, pady=(8,4), padx=(4,4))
     usuario_entry.focus()
 
-    ttk.Label(frm, text="Contraseña:").pack(anchor="w", pady=(8,0))
-    pass_entry = ttk.Entry(frm, width=40, show="*")
-    pass_entry.pack(pady=2)
+    ttk.Label(frm, text="Contraseña: ").grid(row=1, column=0, sticky="e", pady=(4,8), padx=(4,4))
+    pass_entry = ttk.Entry(frm, width=35, show="*")
+    pass_entry.grid(row=1, column=1, pady=(4,8), padx=(4,4))
 
+    # --- etiqueta de estado ---
     status_lbl = ttk.Label(frm, text="")
-    status_lbl.pack(pady=6)
+    status_lbl.grid(row=2, column=0, columnspan=2, pady=(8,4))
+
+    # --- botones en una fila aparte ---
+    btn_frame = ttk.Frame(frm)
+    btn_frame.grid(row=3, column=0, columnspan=2, pady=(10,4))
 
     def intentar_login():
         user = usuario_entry.get().strip()
@@ -209,7 +246,6 @@ def ventana_login():
             status_lbl.config(text="Conectando al AD...")
             login_win.update_idletasks()
             conn = conectar_ldap(user, pw)
-            # si conecta, cerrar login y abrir menu principal
             login_win.destroy()
             ventana_principal(conn)
         except Exception:
@@ -217,12 +253,11 @@ def ventana_login():
             usuario_entry.focus()
             status_lbl.config(text="")
 
-    btn_frame = ttk.Frame(frm)
-    btn_frame.pack(pady=8)
     ttk.Button(btn_frame, text="Iniciar sesión", command=intentar_login).grid(row=0, column=0, padx=6)
     ttk.Button(btn_frame, text="Salir", command=lambda: confirmar_y_cerrar(login_win)).grid(row=0, column=1, padx=6)
 
     login_win.mainloop()
+
 
 def ventana_principal(conn):
     global root_all
