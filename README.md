@@ -32,7 +32,7 @@ Permite consultar, visualizar y notificar por correo electrónico a los usuarios
 
 🧰 Dependencias
 Instala las librerías necesarias con:
-- pip install ldap3 \n
+- pip install ldap3 <br>
 (Tkinter y smtplib vienen incluidos en la instalación estándar de Python.)
 
 ---
