@@ -19,14 +19,14 @@ Permite consultar, visualizar y notificar por correo electrónico a los usuarios
 
 ⚙️ Requisitos del sistema:
 
-	Python 3.8+
-	Conexión a un servidor Active Directory (LDAP/LDAPS) accesible.
-	Cuenta con permisos de lectura sobre los atributos:
-	sAMAccountName
-	displayName
-	mail
-	msDS-UserPasswordExpiryTimeComputed
-	department
+-	Python 3.8+
+-	Conexión a un servidor Active Directory (LDAP/LDAPS) accesible.
+-	Cuenta con permisos de lectura sobre los atributos:
+-	sAMAccountName
+-	displayName
+-	mail
+-	msDS-UserPasswordExpiryTimeComputed
+-	department
 
 ---
 
@@ -39,13 +39,13 @@ pip install ldap3
 
 🧠 Detalles técnicos
 
-	Lenguaje: Python 3
-	Interfaz: Tkinter + ttk
-	Conexión: ldap3 (LDAP sobre SSL/TLS)
-	Envío de correos: smtplib + MIMEText
-	Gestión de fechas: datetime
-	Autor: Eduardo “PaladynamoX” Lizama C.
-	Versión: 1.0.0 (2025)
+-	Lenguaje: Python 3
+-	Interfaz: Tkinter + ttk
+-	Conexión: ldap3 (LDAP sobre SSL/TLS)
+-	Envío de correos: smtplib + MIMEText
+-	Gestión de fechas: datetime
+-	Autor: Eduardo “PaladynamoX” Lizama C.
+-	Versión: 1.0.0 (2025)
 
 ---
 
