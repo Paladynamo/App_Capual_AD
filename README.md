@@ -1,60 +1,182 @@
 # 🔐 AD Password Expiry Notifier
 
-Aplicación de escritorio en **Python (Tkinter)** desarrollada por **Eduardo "PaladynamoX" Lizama C.**  
-Permite consultar, visualizar y notificar por correo electrónico a los usuarios de **Active Directory (AD)** cuya contraseña está próxima a expirar.
+Notificador de expiración de contraseñas de Active Directory (versión 4.0)
+
+<p align="center">
+	<a href="https://www.python.org/"><img alt="Python" src="https://img.shields.io/badge/Python-3.8%2B-3776AB?logo=python&logoColor=white"></a>
+	<img alt="GUI" src="https://img.shields.io/badge/GUI-Tkinter-5A9?logo=python&logoColor=white">
+	<a href="https://ldap3.readthedocs.io/"><img alt="LDAP3" src="https://img.shields.io/badge/LDAP-ldap3-0052CC"></a>
+	<a href="https://openpyxl.readthedocs.io/"><img alt="Excel" src="https://img.shields.io/badge/Excel-openpyxl-217346?logo=microsoft-excel&logoColor=white"></a>
+	<a href="https://matplotlib.org/"><img alt="Matplotlib" src="https://img.shields.io/badge/Charts-matplotlib-013243"></a>
+</p>
+
+Aplicación de escritorio en Python que consulta Active Directory, muestra el estado de expiración de contraseñas y permite enviar avisos personalizados por correo. Incluye exportación a Excel con estilo corporativo y un panel “Dashboard” con gráfico tipo dona.
 
 ---
 
-## 🧩 Características principales
+## Índice
 
-- Conexión segura a un **servidor LDAP/Active Directory**.
-- Interfaz gráfica intuitiva creada con **Tkinter**.
-- Selección del usuario autenticado mediante un **combobox de agentes**.
-- Consulta de usuarios activos cuya contraseña expira en un rango configurable de días.
-- Visualización de los resultados en una **tabla ordenable**.
-- Envío automático de **correos de aviso personalizados** a cada usuario afectado.
-- Posibilidad de **actualizar el filtro de días** sin reiniciar la app.
-
----
-
-⚙️ Requisitos del sistema:
-
--	Python 3.8+
--	Conexión a un servidor Active Directory (LDAP/LDAPS) accesible.
--	Cuenta con permisos de lectura sobre los atributos:
--	sAMAccountName
--	displayName
--	mail
--	msDS-UserPasswordExpiryTimeComputed
--	department
+- [Novedades v4.0](#novedades-v40)
+- [Características](#características)
+- [Requisitos](#requisitos)
+- [Instalación](#instalación)
+- [Configuración](#configuración)
+- [Uso rápido](#uso-rápido)
+- [Exportación a Excel](#exportación-a-excel)
+- [Envío de correos](#envío-de-correos)
+- [Dashboard](#dashboard)
+- [Empaquetado (PyInstaller)](#empaquetado-pyinstaller)
+- [Recursos/Assets](#recursosassets)
+- [Solución de problemas](#solución-de-problemas)
+- [Créditos](#créditos)
 
 ---
 
-🧰 Dependencias
-Instala las librerías necesarias con:
-- pip install ldap3 <br>
-(Tkinter y smtplib vienen incluidos en la instalación estándar de Python.)
+## Novedades v4.0
+
+- Búsqueda global en AD por nombre, usuario o correo (sin excluir “agente”).
+- Exportación a Excel mejorada: hoja “Datos” con estilos, filtros y formato condicional; hoja “Resumen” con KPIs y gráfico de dona; inserción de logo.
+- Seguridad: ya no hay credenciales SMTP embebidas en el código. Se piden al momento de enviar y pueden recordarse “solo durante la sesión”.
+- Ventana de despedida: modal centrado, sin botón, se cierra solo y muestra tu logo personal.
+- Estilo visual unificado (ttk + tema clam) que asegura que el texto en botones sea siempre legible.
+- Manejo de dependencias para exportación (openpyxl y Pillow) con guía para ejecutables.
 
 ---
 
-🧠 Detalles técnicos
+## Características
 
--	Lenguaje: Python 3
--	Interfaz: Tkinter + ttk
--	Conexión: ldap3 (LDAP sobre SSL/TLS)
--	Envío de correos: smtplib + MIMEText
--	Gestión de fechas: datetime
--	Autor: Eduardo “PaladynamoX” Lizama C.
--	Versión: 1.0.0 (2025)
-
----
-
-📨 Contacto
-
-Creado por Eduardo “PaladynamoX” Lizama C. <br>
-💼 Cooperativa Capual - Departamento de Soporte TI <br>
-📧 Contacto: eduardo.1994.arte@gmail.com
+- Conexión segura a Active Directory vía ldap3 (LDAP/LDAPS).
+- UI de escritorio con Tkinter/ttk, tablas ordenables y filtros rápidos.
+- Avisos por correo con HTML e imagen embebida (instrucciones Ctrl+Alt+Supr).
+- Exportación a CSV y a Excel con formato profesional y logo de la institución.
+- Panel “Dashboard” con gráfico tipo dona (matplotlib) y accesos a listas por categoría.
+- Compatibilidad con empaquetado a .exe (PyInstaller).
 
 ---
 
-⭐ Si este proyecto te resultó útil, no olvides dejar una estrella en el repositorio.
+## Requisitos
+
+- Python 3.8 o superior
+- Conectividad al dominio de Active Directory
+- Usuario con permisos de lectura en atributos: sAMAccountName, displayName, mail, msDS-UserPasswordExpiryTimeComputed, department
+
+Dependencias principales (instalación típica):
+- ldap3
+- matplotlib
+- openpyxl (Excel)
+- Pillow (opcional, para insertar imágenes en Excel y procesar logos)
+
+Tkinter y smtplib vienen con Python por defecto.
+
+---
+
+## Instalación
+
+1) Clona o descarga este repositorio.
+2) Crea (opcional) y activa un entorno virtual.
+3) Instala dependencias:
+
+```powershell
+# Windows PowerShell
+pip install ldap3 matplotlib openpyxl Pillow
+```
+
+---
+
+## Configuración
+
+Ajusta los valores del archivo `principal_v4.py` según tu entorno:
+
+- `AD_SERVER`: URL del DC (ej: `ldaps://SRV_DC01_NEW.capual.cl`)
+- `BASE_DN`: DN base del dominio (ej: `DC=capual,DC=cl`)
+- `ALLOWED_OUS`: lista de OUs donde se restringe la consulta de usuarios
+- `SMTP_SERVER` / `SMTP_PORT`: servidor y puerto SMTP (por defecto Office 365)
+- Rutas de imágenes (se detectan automáticamente en el directorio de la app):
+	- `IMG_PATH` (imagen de instrucciones para el correo)
+	- `LOGO_PATH` (logo para Excel)
+	- `FAREWELL_LOGO_PATH` (logo de despedida)
+
+> Nota: el remitente y su contraseña NO están en el código. Se solicitarán al enviar correos y, si lo decides, se recordarán únicamente durante la sesión actual.
+
+---
+
+## Uso rápido
+
+- Ejecuta la aplicación:
+
+```powershell
+python .\principal_v4.py
+```
+
+- Inicia sesión con tu usuario de dominio.
+- Desde el menú:
+	- “Usuarios próximos a expirar”: consulta por rango de días, permite seleccionar destinatarios y enviar correos.
+	- “Dashboard de contraseñas”: muestra resumen con gráfico y acceso al detalle por categoría.
+	- “Buscar por nombre o correo”: búsqueda global flexible en todo el AD.
+
+---
+
+## Exportación a Excel
+
+- La hoja “Datos” incluye: encabezados con estilo, zebra striping, bordes, auto-ancho de columnas, filtros y formato condicional para “Días restantes”.
+- La hoja “Resumen” agrega KPIs por estado (Bien, Próximos, Expirados y, si aplica, Sin dato) y un gráfico de dona con colores coherentes.
+- Si `LOGO_PATH` existe, el logo se inserta en ambas hojas.
+
+---
+
+## Envío de correos
+
+- Al presionar “Enviar correo…”, se abrirá un diálogo pidiendo el correo remitente y su contraseña.
+- Puedes marcar “Recordar durante esta sesión” para no reingresarlos nuevamente.
+- Los mensajes se envían en HTML e incluyen (si existe) la imagen `img_teclas.png` embebida.
+- El progreso del envío se muestra en una ventana con barra de avance y opción de cancelar.
+
+---
+
+## Dashboard
+
+- Pie/dona con tres categorías: Bien (16–90), Próximos (1–15) y Expirados (≤0).
+- Acceso a listas por categoría desde el propio gráfico.
+- Contadores visibles bajo el gráfico y exportación a Excel del listado resultante.
+
+---
+
+## Empaquetado (PyInstaller)
+
+Se incluye `principal_v4.spec`. Puedes usarlo o ejecutar un comando equivalente. Asegúrate de:
+
+- Incluir los módulos de `openpyxl` y (opcionalmente) `Pillow` si deseas insertar imágenes en Excel.
+- Empaquetar los recursos/imagenes: `img_teclas.png`, `logo_capual_antiguo.png`, `kuriboh_logo_despedida.png`.
+- Probar el envío SMTP desde el ejecutable (TLS 587) para verificar conectividad y credenciales.
+
+> Si ejecutas un .exe, la instalación automática de dependencias no está disponible; debes incluirlas en el empaquetado.
+
+---
+
+## Recursos/Assets
+
+- `img_teclas.png` → insertada en el correo como imagen en línea.
+- `logo_capual_antiguo.png` → insertado en Excel (Datos/Resumen).
+- `kuriboh_logo_despedida.png` → mostrado en la ventana de despedida.
+
+Coloca estos archivos junto al ejecutable o al script principal.
+
+---
+
+## Solución de problemas
+
+- “No se pudo conectar al AD”: confirma `AD_SERVER`, credenciales y conectividad/puerto.
+- “No se pudo guardar el Excel”: verifica permisos en la carpeta destino o cierra el archivo si ya estaba abierto.
+- “No se pudieron enviar los correos”: revisa `SMTP_SERVER/PORT`, credenciales del remitente y conectividad TLS/587.
+- El texto de los botones no se ve: la app fuerza un estilo seguro de Tkinter/ttk (clam) para mantener la legibilidad.
+
+---
+
+## Créditos
+
+- Autor: **Eduardo “PaladynamoX” Lizama C.**
+- Organización: **Cooperativa Capual – Departamento de Soporte TI**
+- Versión de la app: **4.0.0 (2025)**
+- Contacto: **eduardo.1994.arte@gmail.com**
+
+> ¿Te fue útil? ⭐ ¡Apoya el proyecto con una estrella!
