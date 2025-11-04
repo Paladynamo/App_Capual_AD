@@ -1,6 +1,10 @@
+<p align="center">
+	<img src="icono_app_edu_original.png" alt="Portada - AD Password Expiry Notifier" width="180">
+</p>
+
 # 🔐 AD Password Expiry Notifier
 
-Notificador de expiración de contraseñas de Active Directory (versión 4.0)
+Notificador de expiración de contraseñas de Active Directory (versión 5.0)
 
 <p align="center">
 	<a href="https://www.python.org/"><img alt="Python" src="https://img.shields.io/badge/Python-3.8%2B-3776AB?logo=python&logoColor=white"></a>
@@ -16,7 +20,7 @@ Aplicación de escritorio en Python que consulta Active Directory, muestra el es
 
 ## Índice
 
-- [Novedades v4.0](#novedades-v40)
+- [Novedades v5.0](#novedades-v50)
 - [Características](#características)
 - [Requisitos](#requisitos)
 - [Instalación](#instalación)
@@ -32,14 +36,22 @@ Aplicación de escritorio en Python que consulta Active Directory, muestra el es
 
 ---
 
-## Novedades v4.0
+## Novedades v5.0
 
-- Búsqueda global en AD por nombre, usuario o correo (sin excluir “agente”).
-- Exportación a Excel mejorada: hoja “Datos” con estilos, filtros y formato condicional; hoja “Resumen” con KPIs y gráfico de dona; inserción de logo.
-- Seguridad: ya no hay credenciales SMTP embebidas en el código. Se piden al momento de enviar y pueden recordarse “solo durante la sesión”.
-- Ventana de despedida: modal centrado, sin botón, se cierra solo y muestra tu logo personal.
-- Estilo visual unificado (ttk + tema clam) que asegura que el texto en botones sea siempre legible.
-- Manejo de dependencias para exportación (openpyxl y Pillow) con guía para ejecutables.
+- Dashboard V2 con mayor interactividad:
+	- Filtros vivos por estado (Bien/Próximos/Expirados) y por rango de días (-30 a 90).
+	- Gráfico dona con drill‑down por clic y tooltips al pasar el mouse.
+	- Histograma de “días restantes”.
+	- Top 10 usuarios más urgentes (doble clic abre propiedades).
+	- Acceso rápido “Abrir vista filtrada” y fila de botones fija al fondo.
+- Exportación a Excel “Resumen” reforzada:
+	- Logo con reescalado nítido (Pillow LANCZOS) y títulos reubicados.
+	- KPIs tipo “cards”, gráfico de dona, porcentajes con barras de datos y enlace a “Datos”.
+	- Tabla de Top departamentos y “Top 10 más urgentes”.
+	- Nota explicativa y auto‑ajuste de anchos.
+- Envío de correos flexible: selector de método (Outlook o SMTP) con opción “Enviar como”.
+- Búsqueda global en AD por nombre, usuario o correo (amplia y rápida).
+- Estilo visual consolidado (ttk/clam) con textos legibles.
 
 ---
 
@@ -135,9 +147,10 @@ python .\principal_v4.py
 
 ## Dashboard
 
-- Pie/dona con tres categorías: Bien (16–90), Próximos (1–15) y Expirados (≤0).
-- Acceso a listas por categoría desde el propio gráfico.
-- Contadores visibles bajo el gráfico y exportación a Excel del listado resultante.
+- Dona con tres categorías: Bien (16–90), Próximos (1–15) y Expirados (≤0), con drill‑down por clic y tooltips.
+- Filtros vivos por estado y rango de días, KPIs de conteo, histograma de distribución.
+- Top 10 urgentes con doble clic a propiedades y botón “Abrir vista filtrada”.
+- Botonera fija inferior para regresar/exportar sin perderla por tamaño de ventana.
 
 ---
 
@@ -174,9 +187,9 @@ Coloca estos archivos junto al ejecutable o al script principal.
 
 ## Créditos
 
-- Autor: **Eduardo “PaladynamoX” Lizama C.**
+- Autor: **Eduardo “PaladynamoX” Lizama C.** — GitHub: [@Paladynamo](https://github.com/Paladynamo)
 - Organización: **Cooperativa Capual – Departamento de Soporte TI**
-- Versión de la app: **4.0.0 (2025)**
+- Versión de la app: **5.0.0 (2025)**
 - Contacto: **eduardo.1994.arte@gmail.com**
 
 > ¿Te fue útil? ⭐ ¡Apoya el proyecto con una estrella!

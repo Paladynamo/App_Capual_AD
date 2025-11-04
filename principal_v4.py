@@ -1,5 +1,5 @@
 # principal_v3.py
-# Versión 3 - Dashboard interactivo con detalle por categoría
+# Versión 5 - Dashboard interactivo con detalle por categoría
 # Integrado en un solo archivo según el proyecto del usuario.
 
 from ldap3 import Server, Connection, ALL, SUBTREE
@@ -8,6 +8,279 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
+
+# ==============================
+# Método de envío alternativo: Outlook (perfil local)
+# ==============================
+def seleccionar_metodo_envio(parent):
+    """Diálogo simple para elegir método de envío y, si es Outlook,
+    permitir opcionalmente "Enviar como" (por ejemplo soporte@capual.cl).
+    Devuelve (method, enviar_como) donde method es 'outlook' o 'smtp'.
+    """
+    # Detectar si Outlook (pywin32) parece disponible
+    outlook_disponible = False
+    try:
+        import importlib
+        importlib.import_module('win32com.client')  # type: ignore
+        outlook_disponible = True
+    except Exception:
+        outlook_disponible = False
+
+    dlg = tk.Toplevel(parent)
+    setup_style(dlg)
+    dlg.title("Método de envío de correos")
+    dlg.resizable(False, False)
+    dlg.transient(parent)
+    dlg.grab_set()
+    centrar_ventana(dlg, 520, 220)
+
+    frm = ttk.Frame(dlg, padding=12)
+    frm.pack(fill="both", expand=True)
+
+    ttk.Label(frm, text="Elige cómo enviar los correos:").pack(anchor="w")
+    metodo_var = tk.StringVar(value="outlook" if outlook_disponible else "smtp")
+    rb1 = ttk.Radiobutton(frm, text="Usar Outlook (más simple)", value="outlook", variable=metodo_var)
+    rb2 = ttk.Radiobutton(frm, text="Usar SMTP (pedirá usuario/clave)", value="smtp", variable=metodo_var)
+    rb1.pack(anchor="w", pady=(6,2))
+    rb2.pack(anchor="w", pady=(0,10))
+
+    if not outlook_disponible:
+        try:
+            rb1.state(["disabled"])  # deshabilitar si no disponible
+        except Exception:
+            pass
+        ttk.Label(frm, text="Outlook no disponible en este equipo (falta pywin32 o Outlook).",
+                  foreground="#a33").pack(anchor="w")
+
+    # Campo opcional Enviar como (solo para Outlook)
+    enviar_como_var = tk.StringVar(value="")
+    enviar_como_row = ttk.Frame(frm)
+    enviar_como_row.pack(fill="x", pady=(10,0))
+    ttk.Label(enviar_como_row, text="Enviar como (opcional):").pack(side="left")
+    e_enviar_como = ttk.Entry(enviar_como_row, textvariable=enviar_como_var, width=34)
+    e_enviar_como.pack(side="left", padx=(8,0))
+
+    ayuda = ttk.Label(frm, text="Deja vacío para usar tu propia cuenta de Outlook.\n"
+                             "Para usar soporte@capual.cl necesitas permiso de 'Enviar como' o se enviará 'en nombre de'.",
+                      font=("Segoe UI", 9))
+    ayuda.pack(anchor="w", pady=(6,0))
+
+    def toggle_enviar_como(*args):
+        if metodo_var.get() == "outlook":
+            try:
+                e_enviar_como.state(["!disabled"])  # habilitar
+            except Exception:
+                pass
+        else:
+            enviar_como_var.set("")
+            try:
+                e_enviar_como.state(["disabled"])  # deshabilitar
+            except Exception:
+                pass
+
+    metodo_var.trace_add("write", lambda *a: toggle_enviar_como())
+    toggle_enviar_como()
+
+    btns = ttk.Frame(frm)
+    btns.pack(fill="x", pady=(12,0))
+    result = {"ok": False}
+
+    def aceptar():
+        result["ok"] = True
+        dlg.destroy()
+
+    def cancelar():
+        result["ok"] = False
+        dlg.destroy()
+
+    ttk.Button(btns, text="Cancelar", command=cancelar).pack(side="right", padx=(6,0))
+    ttk.Button(btns, text="Continuar", command=aceptar).pack(side="right")
+
+    dlg.bind("<Escape>", lambda e: cancelar())
+    dlg.wait_window()
+
+    if not result["ok"]:
+        return None, None
+    return metodo_var.get(), (enviar_como_var.get().strip() or None)
+
+
+def _get_outlook_app():
+    """Intenta inicializar Outlook COM con varios ProgID y EnsureDispatch.
+    Lanza la última excepción si no es posible.
+    """
+    try:
+        import pythoncom  # type: ignore
+        pythoncom.CoInitialize()
+    except Exception:
+        # Continuar incluso si falla; win32com suele inicializar por nosotros
+        pass
+
+    try:
+        import win32com.client  # type: ignore
+        from win32com.client import gencache  # type: ignore
+    except Exception as e:
+        raise e
+
+    progids = [
+        "Outlook.Application",
+        "Outlook.Application.16",
+        "Outlook.Application.15",
+    ]
+    last_err = None
+    for pid in progids:
+        try:
+            # EnsureDispatch regenera wrappers si el cache está corrupto
+            return gencache.EnsureDispatch(pid)
+        except Exception as e:
+            last_err = e
+            continue
+    if last_err:
+        raise last_err
+    raise RuntimeError("No se pudo localizar Outlook (COM no registrado)")
+
+
+def enviar_correos_via_outlook(usuarios, parent, enviar_como=None):
+    """Envía correos usando Outlook (perfil local). Soporta 'Enviar como' si hay permisos.
+    Devuelve True si envió al menos uno.
+    """
+    # Verificar selección
+    # Cargar COM de Outlook
+    try:
+        outlook = _get_outlook_app()
+    except Exception as e:
+        # Mensaje claro para causas típicas de REGDB_E_CLASSNOTREG
+        msg = (
+            "No se pudo inicializar Outlook (COM).\n\n"
+            f"Detalle: {e}\n\n"
+            "Posibles causas y soluciones:\n"
+            "• Outlook no está instalado o no se abrió al menos una vez.\n"
+            "• La edición de Outlook de Microsoft Store no expone COM. Instala Microsoft 365 Apps (Click-to-Run).\n"
+            "• Reparar Office desde Configuración > Aplicaciones > Microsoft 365 > Modificar.\n"
+            "• Asegúrate de tener pywin32 instalado en el entorno de ejecución.\n"
+        )
+        messagebox.showerror("Outlook no disponible", msg, parent=parent)
+        return False
+
+    if not usuarios:
+        messagebox.showwarning("Aviso", "No hay usuarios seleccionados para enviar correos.", parent=parent)
+        return False
+
+    if not messagebox.askyesno("Confirmar envío",
+                               f"¿Desea enviar correos a {len(usuarios)} usuarios?\n\nVía: Outlook" +
+                               (f"\nEnviar como: {enviar_como}" if enviar_como else ""), parent=parent):
+        return False
+
+    progress_win = tk.Toplevel(parent)
+    setup_style(progress_win)
+    progress_win.title("Enviando correos… (Outlook)")
+    progress_win.transient(parent)
+    progress_win.grab_set()
+    centrar_ventana(progress_win, 460, 150)
+
+    frm = ttk.Frame(progress_win, padding=12)
+    frm.pack(fill="both", expand=True)
+    lbl = ttk.Label(frm, text="Preparando…")
+    lbl.pack(fill="x", pady=(0,8))
+    pbar = ttk.Progressbar(frm, mode="determinate", maximum=len(usuarios))
+    pbar.pack(fill="x")
+    cancel = tk.BooleanVar(value=False)
+    ttk.Button(frm, text="Cancelar", command=lambda: cancel.set(True)).pack(pady=(10,0))
+
+    enviados = 0
+    try:
+        # ns = outlook.GetNamespace("MAPI")  # si se requiere: ns.Logon(None, None, True, False)
+
+        for idx, u in enumerate(usuarios, start=1):
+            if cancel.get():
+                break
+            correo = u.get("correo")
+            if not correo or "@" not in correo:
+                continue
+
+            try:
+                mail = outlook.CreateItem(0)  # olMailItem
+                mail.To = correo
+                mail.Subject = "⚠️ Aviso: Tu contraseña está próxima a expirar"
+                if enviar_como:
+                    # Enviar como / en nombre de (requiere permisos en Exchange)
+                    try:
+                        mail.SentOnBehalfOfName = enviar_como
+                    except Exception:
+                        pass
+
+                html_body = f"""
+                <html>
+                <body style="font-family:Segoe UI, sans-serif; color:#333;">
+                    <p>Estimado/a <b>{u.get('nombre','')}</b>,</p>
+                    <p>Tu contraseña expira en <b>{u.get('dias','-')} días</b> (el {u.get('expira','-')}).<br>
+                    Por favor, actualízala antes de que caduque para evitar bloqueos de acceso.</p>
+                    <p><b>Para cambiar tu contraseña:</b><br>
+                    Presiona <i>Ctrl + Alt + Supr</i> y selecciona la opción "Cambiar contraseña".</p>
+                    <p style="text-align:center;">
+                        <img src="cid:img_teclas" alt="Instrucciones Ctrl+Alt+Supr" width="420">
+                    </p>
+                    <p>Si tienes problemas, comunícate con:<br>
+                    - Eduardo L. (Nexo 4006)<br>
+                    - Ignacio C. (Nexo 4018)<br>
+                    Departamento de Servicios TI</p>
+                    <p>🏢 Departamento: {u.get('departamento','No especificado')}<br>
+                    👤 Usuario: {u.get('usuario','')}</p>
+                    <p>Saludos cordiales,<br>
+                    <b>Departamento de Soporte TI</b><br>
+                    Capual - Cooperativa de Ahorro y Crédito</p>
+                </body>
+                </html>
+                """
+
+                # Adjuntar imagen inline con Content-ID
+                if os.path.exists(IMG_PATH):
+                    attach = mail.Attachments.Add(IMG_PATH)
+                    try:
+                        # PR_ATTACH_CONTENT_ID = 0x3712001F
+                        pa = attach.PropertyAccessor
+                        pa.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", "img_teclas")
+                    except Exception:
+                        pass
+
+                mail.HTMLBody = html_body
+                mail.Send()
+                enviados += 1
+            except Exception:
+                # Continuar con el siguiente destinatario
+                pass
+
+            lbl.config(text=f"Enviando {idx}/{len(usuarios)}…")
+            pbar['value'] = idx
+            progress_win.update_idletasks()
+
+    except Exception as e:
+        # -2147221005 => REGDB_E_CLASSNOTREG (Clase no registrada)
+        h = getattr(e, 'hresult', None)
+        if h == -2147221005 or "clase" in str(e).lower():
+            sugerencia = (
+                "Clase COM no registrada para Outlook.\n\n"
+                "Sugerencias:\n"
+                "• Evita la versión de Microsoft Store de Office; usa Microsoft 365 Apps (Click-to-Run).\n"
+                "• Ejecuta Outlook una vez para que se registre.\n"
+                "• Repara Office.\n"
+            )
+        else:
+            sugerencia = ""
+        messagebox.showerror(
+            "Outlook",
+            f"No se pudo enviar con Outlook:\n{e}\n\n{sugerencia}Prueba con SMTP.",
+            parent=progress_win,
+        )
+    finally:
+        try:
+            progress_win.destroy()
+        except Exception:
+            pass
+
+    if enviados > 0:
+        messagebox.showinfo("Envío finalizado", f"Correos enviados: {enviados}", parent=parent)
+        return True
+    return False
 import tkinter as tk
 from tkinter import messagebox, ttk, simpledialog, filedialog
 import sys
@@ -16,7 +289,7 @@ import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import os, sys
+import os, sys, re
 
 # ==============================
 # CONFIGURACIÓN (ajusta según tu entorno)
@@ -34,16 +307,16 @@ ALLOWED_OUS = [
 
 
 # Las credenciales de envío se solicitarán en tiempo de ejecución (no se almacenan en el código)
-SMTP_REMITENTE = None
-SMTP_PASSWORD = None
+SMTP_REMITENTE = "printservice@capual.cl"
+SMTP_PASSWORD = "PSD34$/srvc123."
 SMTP_SERVER = "smtp.office365.com"
 SMTP_PORT = 587
 
 # Cache opcional de credenciales solo para la sesión actual (si el usuario lo permite)
-_SMTP_CACHE = {"remitente": None, "password": None}
+_SMTP_CACHE = {"remitente": None, "password": None, "from_visible": None}
 
 APP_CREDITOS = """App creada por Eduardo 'PaladynamoX' Lizama C.
-Versión 4.0.0 - Año 2025"""
+Versión 5.0.0 - Año 2025"""
 
 # Detecta si se está ejecutando desde .exe o desde .py
 if getattr(sys, 'frozen', False):
@@ -119,11 +392,132 @@ def setup_style(root):
         pass
 
 
+# Corrección simple de textos con tildes mal codificadas (mojibake)
+def fix_text_encoding(s: str) -> str:
+    if not isinstance(s, str):
+        return s
+    # Heurística: patrones comunes de mojibake UTF-8 interpretado como Latin-1
+    if any(p in s for p in ("Ã", "Â", "Ð", "Þ")):
+        try:
+            return s.encode("latin-1", errors="ignore").decode("utf-8", errors="ignore")
+        except Exception:
+            return s
+    return s
+
+
 # Ajusta la altura de la tabla y la ventana según el número de registros
 def auto_ajustar_altura(*args, **kwargs):
     # Desactivado por solicitud: mantenemos firma por compatibilidad
     return
 
+
+# ==============================
+# UTILIDAD: Comportamiento unificado de tablas (Treeview)
+# ==============================
+def _parse_date_ddmmyyyy(s: str):
+    try:
+        return datetime.strptime(s.strip(), "%d/%m/%Y %H:%M")
+    except Exception:
+        try:
+            return datetime.strptime(s.strip(), "%d/%m/%Y")
+        except Exception:
+            return None
+
+
+def make_treeview_standard(tree: ttk.Treeview, cols: tuple, item_to_user: dict, on_view_properties, seleccion: dict):
+    """Aplica a un Treeview:
+    - Orden asc/desc al click en encabezados
+    - Selección por checkbox en columna 'Sel'
+    - Encabezado 'Sel' alterna seleccionar/deseleccionar todo
+    - Resalte de fila activa al click
+    - Doble clic abre propiedades (on_view_properties)
+    """
+    # Estilo de fila activa
+    try:
+        tree.tag_configure("row_active", background="#cce5ff")
+    except Exception:
+        pass
+
+    sort_state = {c: False for c in cols}  # False: asc, True: desc
+    select_all_state = {"all": False}
+    active_iid = {"iid": None}
+
+    def _value_for_sort(iid, col):
+        val = tree.set(iid, col)
+        col_lower = str(col).lower()
+        # Días -> int
+        if "día" in col_lower:
+            try:
+                return int(str(val).strip())
+            except Exception:
+                return float("inf")
+        # Fecha -> datetime
+        if "fecha" in col_lower:
+            dt = _parse_date_ddmmyyyy(str(val))
+            return dt or datetime.max
+        # default: string casefold
+        return str(val).casefold()
+
+    def ordenar(col):
+        reverse = sort_state[col]
+        data = [( _value_for_sort(iid, col), iid) for iid in tree.get_children("")]
+        data.sort(key=lambda t: t[0], reverse=reverse)
+        for idx, (_v, iid) in enumerate(data):
+            tree.move(iid, "", idx)
+        sort_state[col] = not reverse
+
+    def toggle_all_sel():
+        # Solo aplica si existe columna Sel
+        if not cols or str(cols[0]).lower().startswith("sel") is False:
+            return
+        new_state = not select_all_state["all"]
+        for iid in tree.get_children(""):
+            seleccion[iid] = new_state
+            tree.set(iid, cols[0], "☑" if new_state else "☐")
+        select_all_state["all"] = new_state
+
+    # Encabezados
+    for c in cols:
+        if str(c).lower().startswith("sel"):
+            tree.heading(c, text="Sel", command=toggle_all_sel)
+        else:
+            tree.heading(c, command=lambda c=c: ordenar(c))
+
+    # Click: toggle checkbox o marcar fila activa
+    def on_click(event):
+        region = tree.identify("region", event.x, event.y)
+        if region != "cell":
+            return
+        iid = tree.identify_row(event.y)
+        col_id = tree.identify_column(event.x)  # '#1', '#2', ...
+        if not iid:
+            return
+        # Limpiar activo
+        if active_iid["iid"] and tree.exists(active_iid["iid"]):
+            tree.item(active_iid["iid"], tags=())
+        # Si clic en primera columna (Sel)
+        if col_id == "#1" and str(cols[0]).lower().startswith("sel"):
+            seleccion[iid] = not seleccion.get(iid, False)
+            tree.set(iid, cols[0], "☑" if seleccion[iid] else "☐")
+        else:
+            # Resalte fila activa
+            tree.item(iid, tags=("row_active",))
+            active_iid["iid"] = iid
+
+    tree.bind("<Button-1>", on_click)
+
+    # Doble clic: ver propiedades
+    def on_dclick(event):
+        iid = tree.identify_row(event.y)
+        if not iid:
+            return
+        user = item_to_user.get(iid)
+        if user is not None:
+            try:
+                on_view_properties(user)
+            except Exception:
+                pass
+    tree.bind("<Double-1>", on_dclick)
 
 # ==============================
 # UTILIDAD: Exportar Treeview a Excel con estilo, logo y resumen
@@ -253,24 +647,46 @@ def export_tree_to_excel(parent_window, tree: ttk.Treeview, titulo: str = "Repor
     thin = Side(style="thin", color="b6d6c3")
     borde = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    # Logo (si es posible) para ambas hojas
+    # Logo (si es posible) para ambas hojas, con reescalado nítido
     top_row = 1
-    start_col_for_title = 2
+    start_col_for_title = 3  # dejamos espacio para el logo en la columna A/B
     try:
-        if os.path.exists(LOGO_PATH) and 'XLImage' in locals() and XLImage is not None:
-            img1 = XLImage(LOGO_PATH)
+        from io import BytesIO
+        try:
+            from PIL import Image as PILImage  # type: ignore
+        except Exception:
+            PILImage = None  # Pillow no disponible
+        try:
+            from openpyxl.drawing.image import Image as XLImage  # type: ignore
+        except Exception:
+            XLImage = None
+
+        def _add_logo(ws_local, cell="A1", max_w=220, max_h=70):
+            if not os.path.exists(LOGO_PATH) or XLImage is None:
+                return
+            if PILImage is None:
+                # Sin Pillow: agregar sin reescalar (mejor que nada)
+                try:
+                    ws_local.add_image(XLImage(LOGO_PATH))
+                except Exception:
+                    pass
+                return
             try:
-                img1.width, img1.height = 140, int(140 * 0.45)
+                im = PILImage.open(LOGO_PATH)
+                im = im.convert("RGBA")
+                resample = getattr(PILImage, "LANCZOS", getattr(PILImage, "BICUBIC", 1))
+                im.thumbnail((max_w, max_h), resample)
+                bio = BytesIO()
+                im.save(bio, format="PNG")
+                bio.seek(0)
+                img = XLImage(bio)
+                img.anchor = cell
+                ws_local.add_image(img)
             except Exception:
                 pass
-            ws.add_image(img1, "A1")
-            img2 = XLImage(LOGO_PATH)
-            try:
-                img2.width, img2.height = 140, int(140 * 0.45)
-            except Exception:
-                pass
-            ws_res.add_image(img2, "A1")
-            start_col_for_title = 2
+
+        _add_logo(ws_res, "A1", 220, 70)
+        _add_logo(ws, "A1", 220, 70)
     except Exception:
         pass
 
@@ -350,70 +766,199 @@ def export_tree_to_excel(parent_window, tree: ttk.Treeview, titulo: str = "Repor
     except Exception:
         pass
 
-    # Construir hoja Resumen con KPI y gráfico (antes de guardar)
+    # Construir hoja Resumen con KPI vistosas y gráfico donut
     try:
         # Título y subtítulo
-        last_col_res = 4
-        ws_res.merge_cells(start_row=top_row, start_column=start_col_for_title, end_row=top_row, end_column=last_col_res)
+        ws_res.merge_cells(start_row=top_row, start_column=start_col_for_title, end_row=top_row, end_column=start_col_for_title+5)
         c = ws_res.cell(row=top_row, column=start_col_for_title, value=f"Resumen – {titulo}")
         c.font = Font(size=16, bold=True, color="FFFFFF")
         c.fill = PatternFill("solid", fgColor=verde)
         c.alignment = Alignment(horizontal="center", vertical="center")
 
-        ws_res.merge_cells(start_row=top_row+1, start_column=start_col_for_title, end_row=top_row+1, end_column=last_col_res)
+        ws_res.merge_cells(start_row=top_row+1, start_column=start_col_for_title, end_row=top_row+1, end_column=start_col_for_title+5)
         c2 = ws_res.cell(row=top_row+1, column=start_col_for_title, value=f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
         c2.font = Font(size=10, color="24543b")
         c2.alignment = Alignment(horizontal="center")
 
-        table_start_row = top_row + 3
-        ws_res.cell(row=table_start_row, column=2, value="Estado").font = Font(bold=True)
-        ws_res.cell(row=table_start_row, column=3, value="Cantidad").font = Font(bold=True)
-
-        estados = ["Bien (16-90)", "Próximos (1-15)", "Expirados (<=0)"]
-        if counts.get("Sin dato", 0) > 0:
-            estados.append("Sin dato")
-
-        for i, est in enumerate(estados, start=1):
-            ws_res.cell(row=table_start_row + i, column=2, value=est)
-            ws_res.cell(row=table_start_row + i, column=3, value=counts.get(est, 0)).number_format = "0"
-
-        # Estética de tabla
-        for r in range(table_start_row, table_start_row + len(estados) + 1):
-            for cidx in (2, 3):
-                cell = ws_res.cell(row=r, column=cidx)
-                cell.border = borde
-                if r == table_start_row:
-                    cell.fill = PatternFill("solid", fgColor=verde_claro)
-                elif (r - table_start_row) % 2 == 0:
-                    cell.fill = PatternFill("solid", fgColor=gris_claro)
-
-        # Auto ancho
-        ws_res.column_dimensions['B'].width = 25
-        ws_res.column_dimensions['C'].width = 12
-
-        # Gráfico de dona
-        try:
-            from openpyxl.chart import PieChart, Reference
-            chart = PieChart()
-            chart.title = "Distribución por estado"
-            chart.holeSize = 50
-            data = Reference(ws_res, min_col=3, min_row=table_start_row, max_row=table_start_row + len(estados))
-            labels = Reference(ws_res, min_col=2, min_row=table_start_row + 1, max_row=table_start_row + len(estados))
-            chart.add_data(data, titles_from_data=True)
-            chart.set_categories(labels)
-            # Colores a los puntos (verde, amarillo, rojo, gris)
+        # KPIs
+        total_reg = sum(counts.values()) if counts else len(rows)
+        def _pct(n):
             try:
-                from openpyxl.chart.series import DataPoint
-                colors = ["6aa84f", "f1c232", "e06666", "999999"]
-                for idx in range(len(estados)):
-                    dp = DataPoint(idx=idx)
-                    dp.graphicalProperties.solidFill = colors[idx]
-                    chart.series[0].data_points.append(dp)
+                return f"{(n/total_reg*100):.1f}%" if total_reg else "0%"
             except Exception:
-                pass
-            ws_res.add_chart(chart, "E5")
+                return "-"
+
+        kpi_defs = [
+            ("Usuarios totales", total_reg, "24543b", "e9f4ef"),
+            ("Bien (16-90)", counts.get("Bien (16-90)", 0), "1e8449", "d8efe2"),
+            ("Próximos (1-15)", counts.get("Próximos (1-15)", 0), "ba8b00", "fff4cc"),
+            ("Expirados (<=0)", counts.get("Expirados (<=0)", 0), "a93226", "f9d6d5"),
+        ]
+        start_col_cards = 2
+        row_cards = top_row + 3
+        span_w, span_h = 3, 3
+        for i, (label, val, color_txt, color_bg) in enumerate(kpi_defs):
+            c1 = start_col_cards + i * (span_w + 1)
+            r1 = row_cards
+            ws_res.merge_cells(start_row=r1, start_column=c1, end_row=r1+span_h-1, end_column=c1+span_w-1)
+            cell = ws_res.cell(row=r1, column=c1)
+            cell.value = f"{label}\n{val} ({_pct(val)})"
+            cell.font = Font(size=12, bold=True, color=color_txt)
+            cell.fill = PatternFill("solid", fgColor=color_bg)
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            for rr in range(r1, r1+span_h):
+                for cc in range(c1, c1+span_w):
+                    ws_res.cell(row=rr, column=cc).border = borde
+
+        # Datos para gráfico donut + tabla de estados con porcentaje
+        dist_row = row_cards + span_h + 2
+        ws_res.cell(row=dist_row, column=2, value="Estado").font = Font(bold=True)
+        ws_res.cell(row=dist_row, column=3, value="Cantidad").font = Font(bold=True)
+        ws_res.cell(row=dist_row, column=4, value="Porcentaje").font = Font(bold=True)
+        estados = ["Bien (16-90)", "Próximos (1-15)", "Expirados (<=0)"]
+        for i, est in enumerate(estados, start=1):
+            ws_res.cell(row=dist_row+i, column=2, value=est)
+            val = counts.get(est, 0)
+            ws_res.cell(row=dist_row+i, column=3, value=val).number_format = "0"
+            # porcentaje como valor numérico (0..1)
+            pct = (val / total_reg) if total_reg else 0
+            c_pct = ws_res.cell(row=dist_row+i, column=4, value=pct)
+            c_pct.number_format = "0.0%"
+
+        # Barras de datos visuales en la columna de porcentaje
+        try:
+            from openpyxl.formatting.rule import DataBarRule
+            rng_pct = f"D{dist_row+1}:D{dist_row+len(estados)}"
+            rule = DataBarRule(start_type='num', start_value=0, end_type='num', end_value=1,
+                               color="99CC00", showValue=True)
+            ws_res.conditional_formatting.add(rng_pct, rule)
         except Exception:
             pass
+
+        try:
+            from openpyxl.chart import DoughnutChart, Reference
+            donut = DoughnutChart()
+            donut.title = "Distribución por estado"
+            donut.holeSize = 60
+            data = Reference(ws_res, min_col=3, min_row=dist_row, max_row=dist_row+len(estados))
+            labels = Reference(ws_res, min_col=2, min_row=dist_row+1, max_row=dist_row+len(estados))
+            donut.add_data(data, titles_from_data=True)
+            donut.set_categories(labels)
+            ws_res.add_chart(donut, f"E{dist_row}")
+        except Exception:
+            pass
+
+        # Link de navegación a hoja Datos
+        link_row = dist_row + len(estados) + 1
+        go = ws_res.cell(row=link_row, column=2, value="Ir a hoja 'Datos' →")
+        go.hyperlink = "#'Datos'!A1"
+        go.font = Font(color="0563C1", underline="single", bold=True)
+
+        # Top 5 departamentos (<=15 días) si existen columnas
+        dept_top_row = dist_row + len(estados) + 3
+
+        try:
+            dept_idx = None
+            for idx, h in enumerate(headers):
+                if str(h).strip().lower() == "departamento":
+                    dept_idx = idx
+                    break
+            if dept_idx is not None and dias_col_idx is not None:
+                tmp = {}
+                for r in rows:
+                    try:
+                        dias = int(str(r[dias_col_idx]).strip())
+                    except Exception:
+                        continue
+                    if dias <= 15:
+                        d = str(r[dept_idx] or "(Sin departamento)")
+                        tmp[d] = tmp.get(d, 0) + 1
+                top5 = sorted(tmp.items(), key=lambda x: x[1], reverse=True)[:5]
+            else:
+                top5 = []
+
+            ws_res.cell(row=dept_top_row, column=2, value="Top departamentos (<=15 días)").font = Font(bold=True)
+            ws_res.cell(row=dept_top_row+1, column=2, value="Departamento").font = Font(bold=True)
+            ws_res.cell(row=dept_top_row+1, column=3, value="Cantidad").font = Font(bold=True)
+            for i, (dname, n) in enumerate(top5, start=1):
+                ws_res.cell(row=dept_top_row+1+i, column=2, value=dname)
+                ws_res.cell(row=dept_top_row+1+i, column=3, value=n).number_format = "0"
+            for rr in range(dept_top_row+1, dept_top_row+2+max(len(top5),1)):
+                for cc in (2,3):
+                    ws_res.cell(row=rr, column=cc).border = borde
+                    if rr == dept_top_row+1:
+                        ws_res.cell(row=rr, column=cc).fill = PatternFill("solid", fgColor=gris_claro)
+        except Exception:
+            pass
+
+        # Top 10 más urgentes (incluye expirados y próximos)
+        urgent_row = dept_top_row + 2 + max(len(top5), 1) + 2
+
+        try:
+            # Indices de columnas en Datos
+            idx_user = next((i for i,h in enumerate(headers) if str(h).lower().startswith("usuario")), None)
+            idx_name = next((i for i,h in enumerate(headers) if str(h).lower().startswith("nombre")), None)
+            idx_dept = next((i for i,h in enumerate(headers) if "depart" in str(h).lower()), None)
+            idx_fecha = next((i for i,h in enumerate(headers) if "fecha" in str(h).lower()), None)
+            urg = []
+            if dias_col_idx is not None:
+                for r in rows:
+                    try:
+                        d = int(str(r[dias_col_idx]).strip())
+                    except Exception:
+                        continue
+                    if d <= 15:  # próximos o expirados
+                        urg.append((d,
+                                    (r[idx_user] if idx_user is not None else ""),
+                                    (r[idx_name] if idx_name is not None else ""),
+                                    (r[idx_dept] if idx_dept is not None else ""),
+                                    (r[idx_fecha] if idx_fecha is not None else "")))
+                urg.sort(key=lambda x: x[0])
+                urg = urg[:10]
+            # Título
+            ws_res.cell(row=urgent_row, column=2, value="Top 10 más urgentes (≤15 días)").font = Font(bold=True)
+            # Encabezados
+            hdrs = ["Días", "Usuario", "Nombre", "Departamento", "Fecha"]
+            for j, htxt in enumerate(hdrs, start=2):
+                cellh = ws_res.cell(row=urgent_row+1, column=j, value=htxt)
+                cellh.font = Font(bold=True)
+                cellh.fill = PatternFill("solid", fgColor=verde_claro)
+                cellh.border = borde
+            # Filas
+            for i, item in enumerate(urg, start=1):
+                d, u, n, dp, f = item
+                vals = [d, u, n, dp, f]
+                for j, v in enumerate(vals, start=2):
+                    cellv = ws_res.cell(row=urgent_row+1+i, column=j, value=v)
+                    cellv.border = borde
+                    if j == 2:
+                        cellv.number_format = "0"
+            # Zebra
+            total_urg = max(len(urg), 1)
+            for r in range(urgent_row+2, urgent_row+2+total_urg):
+                if (r - (urgent_row+2)) % 2 == 0:
+                    for j in range(2, 7):
+                        ws_res.cell(row=r, column=j).fill = PatternFill("solid", fgColor=gris_claro)
+        except Exception:
+            pass
+
+        # Leyenda y definiciones
+        info_row = urgent_row + 3 + max(len(urg) if 'urg' in locals() else 0, 1)
+        ws_res.merge_cells(start_row=info_row, start_column=2, end_row=info_row+2, end_column=8)
+        note = ws_res.cell(row=info_row, column=2, value=(
+            "Definiciones: Bien=16–90 días, Próximos=1–15 días, Expirados=≤0 días. "
+            "Este informe resume la salud de contraseñas. Use el enlace 'Ir a hoja Datos' para filtrar y revisar casos."
+        ))
+        note.alignment = Alignment(wrap_text=True, vertical="top")
+        note.fill = PatternFill("solid", fgColor=gris_claro)
+        note.border = borde
+
+        # Ajustes de columnas en Resumen
+        for j in range(2, 10):
+            try:
+                ws_res.column_dimensions[get_column_letter(j)].width = 20
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -632,7 +1177,8 @@ def consultar_usuarios(conn):
                     "departamento": dept,
                     "dias": dias_restantes,
                     "expira": expiry_dt.strftime("%d/%m/%Y %H:%M"),
-                    "descripcion": desc
+                    "descripcion": desc,
+                    "dn": str(entry["distinguishedName"]) if entry["distinguishedName"].value else "",
                 })
             except Exception:
                 continue
@@ -659,7 +1205,12 @@ def pedir_credenciales_smtp(parent):
     Añade opción 'Recordar en esta sesión'."""
     remit_var = tk.StringVar(value=_SMTP_CACHE.get("remitente") or "")
     pass_var = tk.StringVar(value="")
+    from_visible_var = tk.StringVar(value=_SMTP_CACHE.get("from_visible") or "")
     remember_var = tk.BooleanVar(value=False)
+
+    # Si hay credenciales fijas configuradas, no pedirlas
+    if SMTP_REMITENTE and SMTP_PASSWORD:
+        return SMTP_REMITENTE, SMTP_PASSWORD, (_SMTP_CACHE.get("from_visible") or None)
 
     dlg = tk.Toplevel(parent)
     setup_style(dlg)
@@ -667,26 +1218,32 @@ def pedir_credenciales_smtp(parent):
     dlg.resizable(False, False)
     dlg.transient(parent)
     dlg.grab_set()
-    centrar_ventana(dlg, 460, 200)
+    centrar_ventana(dlg, 520, 260)
     dlg.protocol("WM_DELETE_WINDOW", lambda: (remit_var.set(""), pass_var.set(""), dlg.destroy()))
 
     frm = ttk.Frame(dlg, padding=12)
     frm.pack(fill="both", expand=True)
 
-    ttk.Label(frm, text="Correo remitente (From):").grid(row=0, column=0, sticky="w", pady=(4,2))
-    e_user = ttk.Entry(frm, textvariable=remit_var, width=40)
+    ttk.Label(frm, text="Correo de autenticación (tu cuenta):").grid(row=0, column=0, sticky="w", pady=(4,2))
+    e_user = ttk.Entry(frm, textvariable=remit_var, width=44)
     e_user.grid(row=1, column=0, sticky="we")
     e_user.focus()
 
     ttk.Label(frm, text="Contraseña:").grid(row=2, column=0, sticky="w", pady=(8,2))
-    e_pass = ttk.Entry(frm, textvariable=pass_var, show="*", width=40)
+    e_pass = ttk.Entry(frm, textvariable=pass_var, show="*", width=44)
     e_pass.grid(row=3, column=0, sticky="we")
 
+    ttk.Label(frm, text="Remitente visible (opcional):").grid(row=4, column=0, sticky="w", pady=(8,2))
+    e_from_visible = ttk.Entry(frm, textvariable=from_visible_var, width=44)
+    e_from_visible.grid(row=5, column=0, sticky="we")
+    ttk.Label(frm, text="Ej.: soporte@capual.cl — si tienes permiso, enviará 'Como'; si no, 'en nombre de'.",
+              font=("Segoe UI", 9)).grid(row=6, column=0, sticky="w")
+
     chk = ttk.Checkbutton(frm, text="Recordar durante esta sesión", variable=remember_var)
-    chk.grid(row=4, column=0, sticky="w", pady=(8,4))
+    chk.grid(row=7, column=0, sticky="w", pady=(8,4))
 
     btns = ttk.Frame(frm)
-    btns.grid(row=5, column=0, sticky="e", pady=(8,0))
+    btns.grid(row=8, column=0, sticky="e", pady=(8,0))
 
     result = {"ok": False}
 
@@ -702,6 +1259,7 @@ def pedir_credenciales_smtp(parent):
         if remember_var.get():
             _SMTP_CACHE["remitente"] = user
             _SMTP_CACHE["password"] = pw
+            _SMTP_CACHE["from_visible"] = from_visible_var.get().strip() or None
         result["ok"] = True
         dlg.destroy()
 
@@ -717,8 +1275,8 @@ def pedir_credenciales_smtp(parent):
 
     dlg.wait_window()
     if result["ok"]:
-        return remit_var.get().strip(), pass_var.get()
-    return None, None
+        return remit_var.get().strip(), pass_var.get(), (from_visible_var.get().strip() or None)
+    return None
 
 
 def enviar_correos_con_progreso(usuarios, parent):
@@ -729,8 +1287,26 @@ def enviar_correos_con_progreso(usuarios, parent):
         messagebox.showwarning("Aviso", "No hay usuarios seleccionados para enviar correos.", parent=parent)
         return False
 
+    # Elegir método: Outlook (simple) o SMTP
+    # Mantener selector si Outlook está disponible; si no, continuar con SMTP directo
+    try:
+        metodo, enviar_como = seleccionar_metodo_envio(parent)
+    except Exception:
+        metodo, enviar_como = "smtp", None
+    if metodo is None:
+        return False
+    if metodo == "outlook":
+        return enviar_correos_via_outlook(usuarios, parent, enviar_como=enviar_como)
+
     # Pedir credenciales (From y password); permitir recordar en sesión
-    remitente, password = pedir_credenciales_smtp(parent)
+    cred = pedir_credenciales_smtp(parent)
+    if not cred:
+        return False
+    if len(cred) == 3:
+        remitente, password, from_visible = cred
+    else:
+        remitente, password = cred
+        from_visible = None
     if not remitente or not password:
         return False
 
@@ -774,7 +1350,11 @@ def enviar_correos_con_progreso(usuarios, parent):
                 continue
 
             msg = MIMEMultipart("related")
-            msg["From"] = remitente
+            # From visible (si se indicó) y Sender para "en nombre de"
+            visible = from_visible or remitente
+            msg["From"] = visible
+            if visible and visible.lower() != remitente.lower():
+                msg["Sender"] = remitente
             msg["To"] = correo
             msg["Subject"] = "⚠️ Aviso: Tu contraseña está próxima a expirar"
 
@@ -973,21 +1553,17 @@ def abrir_usuarios_proximos(parent_win, conn):
         seleccion.clear()
         item_to_user.clear()
         for u in filtered:
-            vals = ("", u["usuario"], u["nombre"], u["correo"], u["departamento"], str(u["dias"]), u["expira"]) 
+            vals = ("☐", u["usuario"], u["nombre"], u["correo"], u["departamento"], str(u["dias"]), u["expira"]) 
             iid = tree.insert("", "end", values=vals)
             seleccion[iid] = False
             item_to_user[iid] = u
 
     insertar_datos()
 
-    def toggle_selection(event):
-        item = tree.identify_row(event.y)
-        if not item:
-            return
-        seleccion[item] = not seleccion[item]
-        tree.set(item, "Sel", "✓" if seleccion[item] else "")
-    tree.bind("<Double-1>", toggle_selection)
-    tree.bind("<Return>", toggle_selection)
+    # Aplicar comportamiento estándar
+    def _ver_props(u):
+        ver_propiedades_usuario(win, conn, u)
+    make_treeview_standard(tree, cols, item_to_user, _ver_props, seleccion)
 
     btn_frame = ttk.Frame(frame)
     btn_frame.pack(fill="x", pady=8)
@@ -1014,7 +1590,7 @@ def abrir_usuarios_proximos(parent_win, conn):
     def enviar_seleccionados():
         usuarios_sel = [item_to_user[iid] for iid, sel in seleccion.items() if sel]
         if not usuarios_sel:
-            messagebox.showwarning("Sin seleccionados", "No hay usuarios seleccionados. Selecciona con doble click sobre una fila.")
+            messagebox.showwarning("Sin seleccionados", "No hay usuarios seleccionados. Marca con el checkbox en la columna 'Sel'.")
             return
         enviado = enviar_correos_con_progreso(usuarios_sel, win)
         if enviado:
@@ -1059,63 +1635,213 @@ def abrir_usuarios_proximos(parent_win, conn):
 # Dashboard mejorado e interactivo
 # -----------------------------
 def abrir_dashboard(parent_win, conn):
+    """Dashboard V2: filtros vivos (estado + rango de días), donut y nuevo histograma,
+    y Top 10 urgentes con doble clic a propiedades."""
     parent_win.withdraw()
     win = tk.Toplevel()
     win.title("Dashboard de contraseñas")
     setup_style(win)
-    centrar_ventana(win, 900, 560)
+    # Dimensión inicial más alta para asegurar visibilidad del pie de página
+    centrar_ventana(win, 1000, 760)
     win.protocol("WM_DELETE_WINDOW", lambda: on_close_subwindow(win, parent_win))
-    frame = ttk.Frame(win, padding=10)
-    frame.pack(fill="both", expand=True)
 
-    # Obtener y clasificar usuarios según nueva política:
-    # - Bien: dias >= 16 y <= 90
-    # - Próximos: dias <= 15 and dias > 0
-    # - Expirados: dias <= 0
+    root = ttk.Frame(win, padding=10)
+    root.pack(fill="both", expand=True)
+
+    # Datos base
     all_users = consultar_usuarios(conn)
-    bien = [u for u in all_users if u["dias"] >= 16 and u["dias"] <= 90]
-    proximos = [u for u in all_users if 1 <= u["dias"] <= 15]
-    expirados = [u for u in all_users if u["dias"] <= 0]
 
-    counts = [len(bien), len(proximos), len(expirados)]
-    labels = [f"Bien (16-90): {counts[0]}", f"Próximos (1-15): {counts[1]}", f"Expirados (<=0): {counts[2]}"]
-    colors = ["#6aa84f", "#f1c232", "#e06666"]  # verde, amarillo, rojo
+    # Panel superior: filtros y KPIs
+    top = ttk.Frame(root)
+    top.pack(fill="x", pady=(0,8))
 
-    fig = Figure(figsize=(6,4), dpi=100)
-    ax = fig.add_subplot(111)
+    # Filtros de estado
+    estado_vars = {
+        "bien": tk.BooleanVar(value=True),
+        "proximos": tk.BooleanVar(value=True),
+        "expirados": tk.BooleanVar(value=True),
+    }
+    filtros = ttk.LabelFrame(top, text="Filtros")
+    filtros.pack(side="left", fill="x", expand=True)
+    ttk.Checkbutton(filtros, text="Bien (16-90)", variable=estado_vars["bien"]).pack(side="left", padx=(6,6))
+    ttk.Checkbutton(filtros, text="Próximos (1-15)", variable=estado_vars["proximos"]).pack(side="left", padx=(6,6))
+    ttk.Checkbutton(filtros, text="Expirados (≤0)", variable=estado_vars["expirados"]).pack(side="left", padx=(6,6))
 
-    total = sum(counts)
-    if total == 0:
-        ax.text(0.5, 0.5, "No hay datos para mostrar", horizontalalignment='center', verticalalignment='center', fontsize=12)
-    else:
-        wedges, texts, autotexts = ax.pie(
-            counts,
-            labels=None,
-            colors=colors,
-            startangle=90,
-            wedgeprops=dict(width=0.5),
-            autopct="%1.1f%%"
-        )
+    # Rango de días: -30 .. 90
+    rango = ttk.LabelFrame(top, text="Rango de días")
+    rango.pack(side="right")
+    min_var = tk.IntVar(value=-30)
+    max_var = tk.IntVar(value=90)
+    frm_rng = ttk.Frame(rango)
+    frm_rng.pack(padx=6, pady=4)
+    ttk.Label(frm_rng, text="Desde").grid(row=0, column=0, padx=(0,6))
+    s_min = ttk.Scale(frm_rng, from_=-30, to=90, orient="horizontal", variable=min_var, length=160)
+    s_min.grid(row=0, column=1)
+    ttk.Label(frm_rng, textvariable=min_var, width=4, anchor="e").grid(row=0, column=2, padx=(6,0))
+    ttk.Label(frm_rng, text="Hasta").grid(row=1, column=0, padx=(0,6), pady=(6,0))
+    s_max = ttk.Scale(frm_rng, from_=-30, to=90, orient="horizontal", variable=max_var, length=160)
+    s_max.grid(row=1, column=1, pady=(6,0))
+    ttk.Label(frm_rng, textvariable=max_var, width=4, anchor="e").grid(row=1, column=2, padx=(6,0))
 
-        ax.axis('equal')
-        ax.set_title("Estado de contraseñas (resumen)")
-        ax.legend(wedges, labels, title="Estados", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1))
-        fig.tight_layout()  # <<< 🔥 Ajuste automático
+    # KPIs simples
+    kpi = ttk.Frame(root)
+    kpi.pack(fill="x", pady=(0,6))
+    kpi_bien = ttk.Label(kpi, text="🟢 Bien: 0")
+    kpi_bien.pack(side="left", padx=8)
+    kpi_prox = ttk.Label(kpi, text="🟡 Próximos: 0")
+    kpi_prox.pack(side="left", padx=8)
+    kpi_exp = ttk.Label(kpi, text="🔴 Expirados: 0")
+    kpi_exp.pack(side="left", padx=8)
 
+    # Zona central: gráficos
+    charts = ttk.Frame(root)
+    charts.pack(fill="both", expand=True)
 
-    canvas = FigureCanvasTkAgg(fig, master=frame)
-    canvas.draw()
-    widget = canvas.get_tk_widget()
-    widget.pack(side="top", fill="both", expand=True)
+    # Donut
+    fig_donut = Figure(figsize=(5,3.2), dpi=100)
+    ax_donut = fig_donut.add_subplot(111)
+    canvas_donut = FigureCanvasTkAgg(fig_donut, master=charts)
+    canvas_donut.get_tk_widget().pack(side="left", fill="both", expand=True, padx=(0,6))
 
-    # etiquetas con conteos
-    cont_frame = ttk.Frame(frame)
-    cont_frame.pack(fill="x", pady=(6,8))
-    ttk.Label(cont_frame, text=f"🟢 Bien (16-90 días): {counts[0]}").pack(side="left", padx=8)
-    ttk.Label(cont_frame, text=f"🟡 Próximos (1-15 días): {counts[1]}").pack(side="left", padx=8)
-    ttk.Label(cont_frame, text=f"🔴 Expirados (≤0 días): {counts[2]}").pack(side="left", padx=8)
+    # Histograma
+    fig_hist = Figure(figsize=(5,3.2), dpi=100)
+    ax_hist = fig_hist.add_subplot(111)
+    canvas_hist = FigureCanvasTkAgg(fig_hist, master=charts)
+    canvas_hist.get_tk_widget().pack(side="left", fill="both", expand=True)
 
-    # Función que abre una ventana con los usuarios de la categoría
+    # Inferior: Top 10 urgentes
+    bottom = ttk.Frame(root)
+    bottom.pack(fill="both", expand=False, pady=(8,0))
+    cols_top = ("Usuario", "Nombre", "Departamento", "Días", "Fecha")
+    # Reducimos altura inicial para garantizar espacio al pie
+    tree_top = ttk.Treeview(bottom, columns=cols_top, show="headings", height=6)
+    for c in cols_top:
+        anchor = "center" if c == "Días" else "w"
+        width = 70 if c == "Días" else 160
+        tree_top.heading(c, text=c)
+        tree_top.column(c, width=width, anchor=anchor)
+    tree_top.pack(side="left", fill="both", expand=True)
+    sb = ttk.Scrollbar(bottom, orient="vertical", command=tree_top.yview)
+    tree_top.configure(yscrollcommand=sb.set)
+    sb.pack(side="left", fill="y")
+
+    # Doble clic en Top 10 → propiedades
+    def on_top_dclick(event):
+        iid = tree_top.focus()
+        if not iid:
+            return
+        u = tree_top.item(iid, "values")
+        # map values to user by sAMAccountName
+        usuario = u[0]
+        for obj in all_users:
+            if obj.get("usuario") == usuario:
+                ver_propiedades_usuario(win, conn, obj)
+                break
+    tree_top.bind("<Double-1>", on_top_dclick)
+
+    # Utilidades de cálculo
+    def _split_estado(lista):
+        b = [u for u in lista if 16 <= u.get("dias", 999) <= 90]
+        p = [u for u in lista if 1 <= u.get("dias", 999) <= 15]
+        e = [u for u in lista if u.get("dias", 999) <= 0]
+        return b, p, e
+
+    def _apply_filters():
+        mn = min_var.get(); mx = max_var.get()
+        if mn > mx:
+            mn, mx = mx, mn
+        # subset por rango de días
+        subset = [u for u in all_users if isinstance(u.get("dias"), int) and mn <= u["dias"] <= mx]
+        b, p, e = _split_estado(subset)
+        selected = []
+        if estado_vars["bien"].get():
+            selected += b
+        if estado_vars["proximos"].get():
+            selected += p
+        if estado_vars["expirados"].get():
+            selected += e
+        return selected, b, p, e
+
+    # Redibujar vistas
+    wedges = []
+    colors = ["#6aa84f", "#f1c232", "#e06666"]
+
+    def _refresh():
+        nonlocal wedges
+        data_all, b, p, e = _apply_filters()
+        # KPIs
+        kpi_bien.configure(text=f"🟢 Bien: {len(b)}")
+        kpi_prox.configure(text=f"🟡 Próximos: {len(p)}")
+        kpi_exp.configure(text=f"🔴 Expirados: {len(e)}")
+
+        # Donut
+        ax_donut.clear()
+        counts = [len(b), len(p), len(e)]
+        total = sum(counts)
+        if total == 0:
+            ax_donut.text(0.5, 0.5, "Sin datos con los filtros", ha='center', va='center')
+            wedges = []
+        else:
+            wedges, _, _ = ax_donut.pie(
+                counts, labels=None, colors=colors, startangle=90,
+                wedgeprops=dict(width=0.5), autopct="%1.1f%%"
+            )
+            # Habilitar interacción por clic sobre cada porción
+            try:
+                for w in wedges:
+                    w.set_picker(True)
+            except Exception:
+                pass
+            ax_donut.axis('equal')
+            labels = [
+                f"Bien (16-90): {counts[0]}",
+                f"Próximos (1-15): {counts[1]}",
+                f"Expirados (<=0): {counts[2]}",
+            ]
+            ax_donut.legend(wedges, labels, title="Estados", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1))
+        fig_donut.tight_layout()
+        canvas_donut.draw()
+
+        # Histograma de días en el subset seleccionado
+        ax_hist.clear()
+        dias_vals = [u["dias"] for u in data_all if isinstance(u.get("dias"), int)]
+        if dias_vals:
+            bins = list(range(min_var.get(), max_var.get()+1, 5))
+            if len(bins) < 2:
+                bins = 10
+            ax_hist.hist(dias_vals, bins=bins, color="#98c379", edgecolor="#2e7d32")
+            ax_hist.set_title("Distribución de días restantes")
+            ax_hist.set_xlabel("Días")
+            ax_hist.set_ylabel("Usuarios")
+        else:
+            ax_hist.text(0.5, 0.5, "Sin datos para histograma", ha='center', va='center')
+        fig_hist.tight_layout()
+        canvas_hist.draw()
+
+        # Top 10 urgentes
+        for iid in tree_top.get_children():
+            tree_top.delete(iid)
+        urg = sorted([u for u in data_all if u.get("dias") is not None], key=lambda x: x["dias"])[:10]
+        for u in urg:
+            tree_top.insert("", "end", values=(u.get("usuario"), u.get("nombre"), u.get("departamento"), u.get("dias"), u.get("expira")))
+
+    # Eventos de filtros (debounce suave)
+    pending = {"id": None}
+
+    def schedule_refresh(*_):
+        if pending["id"]:
+            try:
+                win.after_cancel(pending["id"])
+            except Exception:
+                pass
+        pending["id"] = win.after(180, _refresh)
+
+    for v in estado_vars.values():
+        v.trace_add("write", lambda *a: schedule_refresh())
+    s_min.configure(command=lambda v: schedule_refresh())
+    s_max.configure(command=lambda v: schedule_refresh())
+
+    # Ventana de categoría basada en filtros actuales
     def abrir_ventana_categoria(nombre_cat, usuarios_cat):
         modal = tk.Toplevel()
         modal.title(f"{nombre_cat} - Usuarios")
@@ -1155,40 +1881,20 @@ def abrir_dashboard(parent_win, conn):
         def insertar_tabla(datos):
             for r in tree.get_children():
                 tree.delete(r)
+            seleccion.clear()
+            item_to_user.clear()
             for u in datos:
-                iid = tree.insert("", "end", values=("", u["usuario"], u["nombre"], u["correo"],
+                iid = tree.insert("", "end", values=("☐", u["usuario"], u["nombre"], u["correo"],
                                                      u["departamento"], u.get("dias","-"), u.get("expira","-")))
                 seleccion[iid] = False
                 item_to_user[iid] = u
 
         insertar_tabla(usuarios_cat)
 
-        # Selección con doble clic o Enter
-        def toggle_selection(event):
-            item = tree.identify_row(event.y)
-            if not item:
-                return
-            seleccion[item] = not seleccion[item]
-            tree.set(item, "Sel", "✓" if seleccion[item] else "")
-            tree.item(item, tags=("selected",) if seleccion[item] else ())
-            tree.tag_configure("selected", background="#cce5ff")
-
-        tree.bind("<Double-1>", toggle_selection)
-        tree.bind("<Return>", toggle_selection)
-
-        # Ordenar columnas
-        def ordenar_tabla(col, reverse=False):
-            datos = [(tree.set(k, col), k) for k in tree.get_children('')]
-            try:
-                datos.sort(key=lambda t: (int(t[0]) if str(t[0]).isdigit() else str(t[0]).lower()), reverse=reverse)
-            except Exception:
-                datos.sort(key=lambda t: str(t[0]).lower(), reverse=reverse)
-            for idx, (val, k) in enumerate(datos):
-                tree.move(k, '', idx)
-            tree.heading(col, command=lambda: ordenar_tabla(col, not reverse))
-
-        for c in cols:
-            tree.heading(c, text=c, command=lambda c=c: ordenar_tabla(c))
+        # Comportamiento estándar: ordenar, select-all, resalte, doble clic abre propiedades
+        def _ver_props(u):
+            ver_propiedades_usuario(modal, conn, u)
+        make_treeview_standard(tree, cols, item_to_user, _ver_props, seleccion)
 
         # Filtro
         def filtrar():
@@ -1237,7 +1943,7 @@ def abrir_dashboard(parent_win, conn):
             def enviar_seleccionados():
                 seleccionados = [item_to_user[i] for i, sel in seleccion.items() if sel]
                 if not seleccionados:
-                    messagebox.showwarning("Sin seleccionados", "No has seleccionado ningún usuario (doble clic para marcar).")
+                    messagebox.showwarning("Sin seleccionados", "No has seleccionado ningún usuario. Marca con el checkbox en 'Sel'.")
                     return
                 if messagebox.askyesno("Confirmar envío", f"¿Enviar correos a {len(seleccionados)} usuarios seleccionados?"):
                     enviar_correos_con_progreso(seleccionados, modal)
@@ -1247,64 +1953,81 @@ def abrir_dashboard(parent_win, conn):
 
 
 
-    # conectar eventos de click sobre wedges
-    if total > 0:
-        # hacer que cada wedge sea "pickable"
-        for w in (ax.patches if hasattr(ax, 'patches') else []):
-            pass
+    # Conexión de picking y tooltips para el donut
+    tooltip = tk.Label(root, text="", background="#ffffe0", relief="solid", bd=1)
+    tooltip.place_forget()
 
-        # Usar pick_event: asignar picker a wedges devueltos por pie
-        # Cuando creamos el pie devolvimos 'wedges' arriba
+    def on_pick(event):
+        if not wedges:
+            return
         try:
-            for w in wedges:
-                w.set_picker(True)
+            idx = wedges.index(event.artist)
         except Exception:
-            pass
+            return
+        # Construir subset según filtros actuales y abrir
+        _, b, p, e = _apply_filters()
+        if idx == 0:
+            abrir_ventana_categoria("Bien", b)
+        elif idx == 1:
+            abrir_ventana_categoria("Próximos", p)
+        elif idx == 2:
+            abrir_ventana_categoria("Expirados", e)
 
-        def on_pick(event):
-            artist = event.artist
-            # identificar índice
-            try:
-                idx = wedges.index(artist)
-            except Exception:
-                return
-            if idx == 0:
-                abrir_ventana_categoria("Bien", bien)
-            elif idx == 1:
-                abrir_ventana_categoria("Próximos", proximos)
-            elif idx == 2:
-                abrir_ventana_categoria("Expirados", expirados)
+    def on_move(event):
+        if not wedges or not event.inaxes:
+            tooltip.place_forget()
+            return
+        # recrear labels con conteos actuales
+        _, b, p, e = _apply_filters()
+        labels = [
+            f"Bien (16-90): {len(b)}",
+            f"Próximos (1-15): {len(p)}",
+            f"Expirados (<=0): {len(e)}",
+        ]
+        found = False
+        for i, w in enumerate(wedges):
+            contains, _ = w.contains(event)
+            if contains:
+                tooltip.config(text=labels[i])
+                tooltip.place(x=event.x + 20, y=event.y + 20)
+                found = True
+                break
+        if not found:
+            tooltip.place_forget()
 
-        canvas.mpl_connect('pick_event', on_pick)
+    canvas_donut.mpl_connect('pick_event', on_pick)
+    canvas_donut.mpl_connect('motion_notify_event', on_move)
 
-        # tooltip al mover el ratón
-        tooltip = tk.Label(frame, text="", background="#ffffe0", relief="solid", bd=1)
-        tooltip.place_forget()
+    # botones: anclados al fondo y acción rápida para abrir la vista filtrada
+    def abrir_vista_filtrada():
+        data_all, _, _, _ = _apply_filters()
+        abrir_ventana_categoria("Vista filtrada", data_all)
 
-        def on_move(event):
-            if not event.inaxes:
-                tooltip.place_forget()
-                return
-            found = False
-            for i, w in enumerate(wedges):
-                contains, _ = w.contains(event)
-                if contains:
-                    # posicion absoluta del cursor en ventana
-                    x, y = event.guiEvent.x_root, event.guiEvent.y_root
-                    tooltip.config(text=labels[i])
-                    # colocar tooltip cerca del cursor (coordenadas relativas a la ventana principal)
-                    tooltip.place(x=event.x + 20, y=event.y + 20)
-                    found = True
-                    break
-            if not found:
-                tooltip.place_forget()
-
-        canvas.mpl_connect('motion_notify_event', on_move)
-
-    # botones
-    btn_frame = ttk.Frame(frame)
-    btn_frame.pack(fill="x", pady=8)
+    btn_frame = ttk.Frame(root)
+    btn_frame.pack(side="bottom", fill="x", pady=8)
+    ttk.Button(btn_frame, text="Abrir vista filtrada", command=abrir_vista_filtrada).pack(side="left", padx=8)
     ttk.Button(btn_frame, text="Regresar", command=lambda: (win.destroy(), parent_win.deiconify())).pack(side="right", padx=8)
+
+    # Ajuste dinámico tras construir la UI: calculamos el tamaño requerido
+    try:
+        win.update_idletasks()
+        screen_w = win.winfo_screenwidth()
+        screen_h = win.winfo_screenheight()
+        req_w = win.winfo_reqwidth()
+        req_h = win.winfo_reqheight()
+        # Objetivo: al menos 720px alto o lo que requiera el contenido, sin exceder la pantalla
+        target_w = min(max(1000, req_w), screen_w - 60)
+        target_h = min(max(720, req_h), screen_h - 80)
+        centrar_ventana(win, target_w, target_h)
+        # Evitar que el usuario reduzca tanto que oculte la botonera
+        min_w = min(max(900, int(target_w*0.9)), screen_w - 100)
+        min_h = min(max(640, int(target_h*0.85)), screen_h - 120)
+        win.minsize(min_w, min_h)
+    except Exception:
+        pass
+
+    # Inicializar
+    _refresh()
 
 # -----------------------------
 # Cierre modal
@@ -1391,7 +2114,8 @@ def buscar_usuarios_global(conn, termino: str, *, incluir_deshabilitados: bool =
                 continue
 
             desc = str(entry["description"]) if entry["description"].value else ""
-            if any(ex in desc.lower() for ex in EXCLUDED_DESC):
+            # Excluir descripciones específicas; incluir vacías
+            if desc and any(ex in desc.lower() for ex in EXCLUDED_DESC):
                 continue
 
             mail = str(entry["mail"]) if entry["mail"].value else ""
@@ -1416,6 +2140,238 @@ def buscar_usuarios_global(conn, termino: str, *, incluir_deshabilitados: bool =
             continue
 
     return results
+
+# -----------------------------
+# Modal: Propiedades del usuario (con foto)
+# -----------------------------
+def ver_propiedades_usuario(parent_win, conn, usuario_dict: dict):
+    dn = (usuario_dict or {}).get("dn") or ""
+    sam = (usuario_dict or {}).get("usuario") or ""
+    # Atributos a recuperar
+    attributes = [
+        "displayName",
+        "sAMAccountName",
+        "mail",
+        "department",
+        "title",
+        "description",
+        "userAccountControl",
+        "whenCreated",
+        "whenChanged",
+        "lastLogonTimestamp",
+        "pwdLastSet",
+        "telephoneNumber",
+        "ipPhone",
+        "mobile",
+        "physicalDeliveryOfficeName",
+        "thumbnailPhoto",
+        "distinguishedName",
+    ]
+
+    entry = None
+    try:
+        base = dn if dn else BASE_DN
+        filt = "(objectClass=person)" if dn else f"(sAMAccountName={sam})"
+        conn.search(base, filt, SUBTREE, attributes=attributes)
+        if conn.entries:
+            entry = conn.entries[0]
+    except Exception:
+        entry = None
+
+    # Extraer valores seguros
+    def _get(attr, default=""):
+        try:
+            v = entry[attr].value
+            if v is None:
+                return default
+            return str(v)
+        except Exception:
+            return default
+
+    display = fix_text_encoding(_get("displayName", usuario_dict.get("nombre", sam)))
+    sAM = fix_text_encoding(_get("sAMAccountName", sam))
+    mail = fix_text_encoding(_get("mail", usuario_dict.get("correo", "")))
+    dept = fix_text_encoding(_get("department", usuario_dict.get("departamento", "")))
+    title = fix_text_encoding(_get("title", ""))
+    desc = fix_text_encoding(_get("description", usuario_dict.get("descripcion", "")))
+    tel = fix_text_encoding(_get("telephoneNumber", ""))
+    ipphone = fix_text_encoding(_get("ipPhone", ""))
+    mobile = fix_text_encoding(_get("mobile", ""))
+    office = fix_text_encoding(_get("physicalDeliveryOfficeName", ""))
+    dn_full = _get("distinguishedName", dn)  # ya no se muestra
+    dias = usuario_dict.get("dias", "-")
+
+    # Convertir timestamps si disponibles
+    def _to_dt(v):
+        try:
+            return msds_to_datetime(v)
+        except Exception:
+            return None
+    last_logon_dt = _to_dt(getattr(entry["lastLogonTimestamp"], 'value', None) if entry else None)
+    pwd_last_set_dt = _to_dt(getattr(entry["pwdLastSet"], 'value', None) if entry else None)
+    # Fecha de ingreso: usar whenCreated del objeto (aproxima fecha de alta)
+    ingreso_raw = None
+    try:
+        ingreso_raw = entry["whenCreated"].value if entry else None
+    except Exception:
+        ingreso_raw = None
+    ingreso_dt = None
+    if ingreso_raw:
+        if isinstance(ingreso_raw, datetime):
+            ingreso_dt = ingreso_raw
+        else:
+            try:
+                # ldap3 puede devolver string ISO
+                ingreso_dt = datetime.fromisoformat(str(ingreso_raw).replace('Z','+00:00'))
+            except Exception:
+                try:
+                    ingreso_dt = datetime.strptime(str(ingreso_raw), "%Y%m%d%H%M%S.%fZ")
+                except Exception:
+                    ingreso_dt = None
+    # Mostrar solo fecha (sin hora)
+    ingreso_str = ingreso_dt.strftime("%d/%m/%Y") if ingreso_dt else "-"
+
+    # Foto
+    photo_data = None
+    try:
+        if entry and entry["thumbnailPhoto"].value:
+            photo_data = entry["thumbnailPhoto"].value
+    except Exception:
+        photo_data = None
+
+    # Construir modal
+    dlg = tk.Toplevel(parent_win)
+    setup_style(dlg)
+    dlg.title(f"Información de: {display}")
+    dlg.transient(parent_win)
+    dlg.grab_set()
+    # Altura base más generosa para evitar que la botonera quede fuera del marco
+    centrar_ventana(dlg, 740, 520)
+
+    frm = ttk.Frame(dlg, padding=12)
+    frm.pack(fill="both", expand=True)
+
+    # Top: Encabezado llamativo con fondo
+    header = tk.Frame(frm, bg="#e6f3ec")
+    header.pack(fill="x", pady=(0,10))
+    photo_label = tk.Label(header, bg="#e6f3ec")
+    photo_label.pack(side="left", padx=(8,12), pady=6)
+    title_box = tk.Frame(header, bg="#e6f3ec")
+    title_box.pack(side="left", pady=6)
+    name_lbl = tk.Label(title_box, text=display, font=("Segoe UI Semibold", 16), bg="#e6f3ec", fg="#20302a")
+    name_lbl.pack(anchor="w")
+    if title:
+        sub_lbl = tk.Label(title_box, text=title, font=("Segoe UI", 11), bg="#e6f3ec", fg="#415a4f")
+        sub_lbl.pack(anchor="w")
+
+    # Render foto si existe
+    try:
+        if photo_data:
+            from io import BytesIO
+            from PIL import Image, ImageTk  # type: ignore
+            im = Image.open(BytesIO(photo_data))
+            im = im.convert("RGB")
+            im.thumbnail((128,128), Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.ANTIALIAS)
+            ph = ImageTk.PhotoImage(im)
+            photo_label.configure(image=ph)
+            dlg._user_photo_ref = ph  # evitar GC
+        else:
+            photo_label.configure(text="(sin foto)", fg="#6b6b6b")
+    except Exception:
+        photo_label.configure(text="(sin foto)", fg="#6b6b6b")
+
+    # Grid de propiedades
+    grid = ttk.Frame(frm)
+    grid.pack(fill="both", expand=True)
+    try:
+        grid.columnconfigure(0, weight=0)
+        grid.columnconfigure(1, weight=1)
+    except Exception:
+        pass
+
+    def add_row(r, label, value, *, link_mail=False):
+        ttk.Label(grid, text=label+":", font=("Segoe UI", 10, "bold")).grid(row=r, column=0, sticky="e", padx=(0,6), pady=2)
+        if link_mail and value:
+            # Crear enlace clicable sin forzar 'bg' (ttk usa temas y puede no devolver color de fondo)
+            try:
+                lbl = tk.Label(grid, text=value, fg="#1a73e8", cursor="hand2")
+                def _open_mail(evt=None, m=value):
+                    try:
+                        os.startfile(f"mailto:{m}")
+                    except Exception:
+                        pass
+                lbl.bind("<Button-1>", _open_mail)
+                lbl.grid(row=r, column=1, sticky="w", pady=2)
+            except Exception:
+                ttk.Label(grid, text=str(value)).grid(row=r, column=1, sticky="w", pady=2)
+        else:
+            ttk.Label(grid, text=("" if value is None else str(value))).grid(row=r, column=1, sticky="w", pady=2)
+
+    row = 0
+    try:
+        add_row(row, "Usuario", sAM); row += 1
+        add_row(row, "Correo", mail, link_mail=True); row += 1
+        add_row(row, "Departamento", dept); row += 1
+        if title:
+            add_row(row, "Cargo", title); row += 1
+        if tel:
+            add_row(row, "Teléfono", tel); row += 1
+        # Nexo / IP: ipPhone si existe; si no, intentar extraer extensión de Teléfono
+        nexo = ipphone
+        if not nexo:
+            try:
+                m = re.search(r"\b(\d{4})\b", str(tel or ""))
+                nexo = m.group(1) if m else ""
+            except Exception:
+                nexo = ""
+        if nexo:
+            add_row(row, "Nexo/IP", nexo); row += 1
+        if mobile:
+            add_row(row, "Móvil", mobile); row += 1
+        if office:
+            add_row(row, "Oficina", office); row += 1
+        if desc:
+            add_row(row, "Descripción", desc); row += 1
+        add_row(row, "Días restantes", str(dias)); row += 1
+        add_row(row, "Ingreso", ingreso_str); row += 1
+        if last_logon_dt:
+            add_row(row, "Último inicio sesión", last_logon_dt.strftime("%d/%m/%Y %H:%M")); row += 1
+        if pwd_last_set_dt:
+            add_row(row, "Pwd actualizada", pwd_last_set_dt.strftime("%d/%m/%Y %H:%M")); row += 1
+    except Exception:
+        # Ante cualquier imprevisto, no romper el modal
+        pass
+
+    # Botones
+    btns = ttk.Frame(frm)
+    btns.pack(fill="x", pady=(10,0))
+
+    def _copy(text):
+        try:
+            dlg.clipboard_clear(); dlg.clipboard_append(text)
+        except Exception:
+            pass
+
+    # Solo dejamos 'Copiar usuario' como pediste
+    ttk.Button(btns, text="Copiar usuario", command=lambda: _copy(sAM)).pack(side="left", padx=4)
+    ttk.Button(btns, text="Cerrar", command=lambda: dlg.destroy()).pack(side="right")
+
+    dlg.bind("<Escape>", lambda e: dlg.destroy())
+
+    # Ajustar tamaño final según contenido para no ocultar la botonera; limitar a alto de pantalla
+    try:
+        dlg.update_idletasks()
+        req_w = dlg.winfo_reqwidth()
+        req_h = dlg.winfo_reqheight()
+        scr_w = dlg.winfo_screenwidth()
+        scr_h = dlg.winfo_screenheight()
+        final_w = max(740, min(req_w + 20, scr_w - 80))
+        final_h = max(520, min(req_h + 20, scr_h - 120))
+        centrar_ventana(dlg, final_w, final_h)
+        # Fijar un mínimo razonable por si se redimensiona accidentalmente
+        dlg.minsize(680, 460)
+    except Exception:
+        pass
 
 # -----------------------------
 # Ventana de búsqueda global
@@ -1478,21 +2434,16 @@ def abrir_busqueda_usuario(parent_win, conn):
         seleccion.clear()
         item_to_user.clear()
         for u in datos:
-            vals = ("", u["usuario"], u["nombre"], u["correo"], u["departamento"], str(u["dias"]), u["expira"])
+            vals = ("☐", u["usuario"], u["nombre"], u["correo"], u["departamento"], str(u["dias"]), u["expira"]) 
             iid = tree.insert("", "end", values=vals)
             seleccion[iid] = False
             item_to_user[iid] = u
     # altura fija: sin auto-resize
 
-    def toggle_selection(event):
-        item = tree.identify_row(event.y)
-        if not item:
-            return
-        seleccion[item] = not seleccion[item]
-        tree.set(item, "Sel", "✓" if seleccion[item] else "")
-
-    tree.bind("<Double-1>", toggle_selection)
-    tree.bind("<Return>", toggle_selection)
+    # Comportamiento estándar: ordenar, seleccionar con check y doble clic abre propiedades
+    def _ver_props(u):
+        ver_propiedades_usuario(win, conn, u)
+    make_treeview_standard(tree, cols, item_to_user, _ver_props, seleccion)
 
     # Botonera
     btns = ttk.Frame(frame)
@@ -1501,7 +2452,7 @@ def abrir_busqueda_usuario(parent_win, conn):
     def enviar_sel():
         usuarios_sel = [item_to_user[iid] for iid, sel in seleccion.items() if sel]
         if not usuarios_sel:
-            messagebox.showwarning("Sin seleccionados", "No hay usuarios seleccionados. Doble clic para marcar.")
+            messagebox.showwarning("Sin seleccionados", "No hay usuarios seleccionados. Marca con el checkbox en 'Sel'.")
             return
         enviar_correos_con_progreso(usuarios_sel, win)
 
