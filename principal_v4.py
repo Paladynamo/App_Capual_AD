@@ -431,17 +431,46 @@ def setup_style(root):
         pass
 
 
-# Corrección simple de textos con tildes mal codificadas (mojibake)
-def fix_text_encoding(s: str) -> str:
-    if not isinstance(s, str):
-        return s
-    # Heurística: patrones comunes de mojibake UTF-8 interpretado como Latin-1
-    if any(p in s for p in ("Ã", "Â", "Ð", "Þ")):
-        try:
-            return s.encode("latin-1", errors="ignore").decode("utf-8", errors="ignore")
-        except Exception:
-            return s
-    return s
+# Corrección robusta de textos mal codificados (tildes/mojibake/escapes \xNN)
+def fix_text_encoding(s) -> str:
+    """Normaliza texto proveniente de LDAP u otras fuentes:
+    - Decodifica bytes a str (utf-8 -> latin-1 fallback)
+    - Corrige mojibake típico (Ã, Â, etc.)
+    - Interpreta secuencias de escape tipo "\\xNN" si aparecen (p.ej. C\\xf3rdoba -> Córdoba)
+    """
+    try:
+        # 1) Asegurar string
+        if s is None:
+            return ""
+        if isinstance(s, bytes):
+            try:
+                s = s.decode("utf-8")
+            except Exception:
+                s = s.decode("latin-1", errors="ignore")
+        elif not isinstance(s, str):
+            s = str(s)
+
+        out = s
+
+        # 2) Mojibake UTF-8 leído como Latin-1
+        if any(p in out for p in ("Ã", "Â", "Ð", "Þ")):
+            try:
+                out = out.encode("latin-1", errors="ignore").decode("utf-8", errors="ignore")
+            except Exception:
+                pass
+
+        # 3) Secuencias \xNN/\uNNNN -> decodificar con unicode_escape si aparecen
+        if ("\\x" in out) or ("\\u" in out):
+            try:
+                import codecs
+                out = codecs.decode(out, "unicode_escape")
+            except Exception:
+                pass
+
+        return out
+    except Exception:
+        # En caso extremo, devolver representación segura
+        return "" if s is None else str(s)
 
 
 # Ajusta la altura de la tabla y la ventana según el número de registros
@@ -1223,22 +1252,26 @@ def consultar_usuarios(conn):
 
         for entry in conn.entries:
             try:
-                sAM = str(entry["sAMAccountName"]) if entry["sAMAccountName"].value else ""
+                sAM = str(entry["sAMAccountName"].value) if entry["sAMAccountName"].value else ""
                 if not sAM:
                     continue
 
                 # Excluir si descripción coincide con alguno de los términos prohibidos
-                desc = str(entry["description"]) if entry["description"].value else ""
+                desc_raw = entry["description"].value if entry["description"].value else ""
+                desc = fix_text_encoding(desc_raw)
                 if any(ex in desc.lower() for ex in EXCLUDED_DESC):
                     continue
 
                 # Validar correo (doble seguridad)
-                mail = str(entry["mail"]) if entry["mail"].value else ""
+                mail_raw = entry["mail"].value if entry["mail"].value else ""
+                mail = fix_text_encoding(mail_raw)
                 if not mail or "@" not in mail:
                     continue
 
-                display = str(entry["displayName"]) if entry["displayName"].value else sAM
-                dept = str(entry["department"]) if entry["department"].value else ""
+                display_raw = entry["displayName"].value if entry["displayName"].value else sAM
+                display = fix_text_encoding(display_raw)
+                dept_raw = entry["department"].value if entry["department"].value else ""
+                dept = fix_text_encoding(dept_raw)
                 expiry_raw = entry["msDS-UserPasswordExpiryTimeComputed"].value
                 expiry_dt = msds_to_datetime(expiry_raw)
                 if not expiry_dt:
@@ -1253,7 +1286,7 @@ def consultar_usuarios(conn):
                     "dias": dias_restantes,
                     "expira": expiry_dt.strftime("%d/%m/%Y %H:%M"),
                     "descripcion": desc,
-                    "dn": str(entry["distinguishedName"]) if entry["distinguishedName"].value else "",
+                    "dn": str(entry["distinguishedName"].value) if entry["distinguishedName"].value else "",
                 })
             except Exception:
                 continue
@@ -2205,19 +2238,23 @@ def buscar_usuarios_global(conn, termino: str, *, incluir_deshabilitados: bool =
 
     for entry in conn.entries:
         try:
-            sAM = str(entry["sAMAccountName"]) if entry["sAMAccountName"].value else ""
+            sAM = str(entry["sAMAccountName"].value) if entry["sAMAccountName"].value else ""
             if not sAM:
                 continue
 
-            desc = str(entry["description"]) if entry["description"].value else ""
+            desc_raw = entry["description"].value if entry["description"].value else ""
+            desc = fix_text_encoding(desc_raw)
             # Excluir descripciones específicas; incluir vacías
             if desc and any(ex in desc.lower() for ex in EXCLUDED_DESC):
                 continue
 
-            mail = str(entry["mail"]) if entry["mail"].value else ""
-            display = str(entry["displayName"]) if entry["displayName"].value else sAM
-            dept = str(entry["department"]) if entry["department"].value else ""
-            dn = str(entry["distinguishedName"]) if entry["distinguishedName"].value else ""
+            mail_raw = entry["mail"].value if entry["mail"].value else ""
+            mail = fix_text_encoding(mail_raw)
+            display_raw = entry["displayName"].value if entry["displayName"].value else sAM
+            display = fix_text_encoding(display_raw)
+            dept_raw = entry["department"].value if entry["department"].value else ""
+            dept = fix_text_encoding(dept_raw)
+            dn = str(entry["distinguishedName"].value) if entry["distinguishedName"].value else ""
             expiry_raw = entry["msDS-UserPasswordExpiryTimeComputed"].value
             expiry_dt = msds_to_datetime(expiry_raw)
             dias_restantes = (expiry_dt - now).days if expiry_dt else None
@@ -2261,6 +2298,7 @@ def ver_propiedades_usuario(parent_win, conn, usuario_dict: dict):
         "mobile",
         "physicalDeliveryOfficeName",
         "thumbnailPhoto",
+        "jpegPhoto",
         "distinguishedName",
     ]
 
@@ -2276,11 +2314,30 @@ def ver_propiedades_usuario(parent_win, conn, usuario_dict: dict):
 
     # Extraer valores seguros
     def _get(attr, default=""):
+        """Obtiene y normaliza un atributo del entry LDAP.
+        - Si es bytes, intenta utf-8 y luego latin-1
+        - Si es list/tuple, toma el primer elemento no vacío
+        - Aplica fix_text_encoding al resultado final
+        """
         try:
             v = entry[attr].value
-            if v is None:
-                return default
-            return str(v)
+        except Exception:
+            v = None
+        if v is None:
+            return default
+        try:
+            # Elegir primer valor si es una colección
+            if isinstance(v, (list, tuple)):
+                v = next((x for x in v if x not in (None, "")), None)
+                if v is None:
+                    return default
+            # Decodificar bytes
+            if isinstance(v, bytes):
+                try:
+                    v = v.decode("utf-8")
+                except Exception:
+                    v = v.decode("latin-1", errors="ignore")
+            return fix_text_encoding(v)
         except Exception:
             return default
 
@@ -2332,6 +2389,8 @@ def ver_propiedades_usuario(parent_win, conn, usuario_dict: dict):
     try:
         if entry and entry["thumbnailPhoto"].value:
             photo_data = entry["thumbnailPhoto"].value
+        elif entry and getattr(entry, "jpegPhoto", None) and entry["jpegPhoto"].value:
+            photo_data = entry["jpegPhoto"].value
     except Exception:
         photo_data = None
 
@@ -2364,7 +2423,9 @@ def ver_propiedades_usuario(parent_win, conn, usuario_dict: dict):
     try:
         if photo_data:
             from io import BytesIO
-            from PIL import Image, ImageTk  # type: ignore
+            from PIL import Image, ImageTk, ImageFile  # type: ignore
+            # Algunos thumbnails en AD pueden venir truncados; permitir carga parcial segura
+            ImageFile.LOAD_TRUNCATED_IMAGES = True
             im = Image.open(BytesIO(photo_data))
             im = im.convert("RGB")
             im.thumbnail((128,128), Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.ANTIALIAS)

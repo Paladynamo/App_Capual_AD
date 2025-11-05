@@ -1,12 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('img_teclas.png', '.'), ('logo_capual_antiguo.png', '.'), ('kuriboh_logo_despedida.png', '.'), ('icono_barra_title_oshawot.png', '.')]
+datas = [('icono_barra_title_oshawot.png', '.'), ('icono_app_edu_original.png', '.'), ('img_teclas.png', '.'), ('kuriboh_logo_despedida.png', '.'), ('logo_capual_antiguo.png', '.')]
 binaries = []
 hiddenimports = []
-tmp_ret = collect_all('matplotlib')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+datas += collect_data_files('matplotlib')
+hiddenimports += collect_submodules('matplotlib')
 tmp_ret = collect_all('openpyxl')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('PIL')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('ldap3')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('pyasn1')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
@@ -44,4 +52,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    version='version_info.txt',
+    icon=['icono_app_edu.ico'],
 )
