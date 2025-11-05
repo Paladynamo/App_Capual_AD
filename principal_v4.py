@@ -316,7 +316,7 @@ SMTP_PORT = 587
 _SMTP_CACHE = {"remitente": None, "password": None, "from_visible": None}
 
 APP_CREDITOS = """App creada por Eduardo 'PaladynamoX' Lizama C.
-Versión 5.0.0 - Año 2025"""
+Versión 6.0.0 - Año 2025"""
 
 # Detecta si se está ejecutando desde .exe o desde .py
 if getattr(sys, 'frozen', False):
@@ -327,6 +327,39 @@ else:
 IMG_PATH = os.path.join(BASE_DIR, "img_teclas.png")
 LOGO_PATH = os.path.join(BASE_DIR, "logo_capual_antiguo.png")
 FAREWELL_LOGO_PATH = os.path.join(BASE_DIR, "kuriboh_logo_despedida.png")
+TITLE_ICON_PATH = os.path.join(BASE_DIR, "icono_barra_title_oshawot.png")
+
+# Cache de icono para no recargarlo en cada ventana y evitar GC
+_TITLE_ICON_CACHE = {"img": None}
+
+def set_window_icon(win):
+    """Establece un icono personalizado en la barra de título.
+    Intenta cargar PNG con iconphoto; si falla, prueba con .ico si existe.
+    """
+    try:
+        # Cargar PNG una sola vez y mantener referencia viva
+        if _TITLE_ICON_CACHE["img"] is None and os.path.exists(TITLE_ICON_PATH):
+            try:
+                _TITLE_ICON_CACHE["img"] = tk.PhotoImage(file=TITLE_ICON_PATH)
+            except Exception:
+                _TITLE_ICON_CACHE["img"] = None
+        if _TITLE_ICON_CACHE["img"] is not None:
+            try:
+                win.iconphoto(True, _TITLE_ICON_CACHE["img"])
+                setattr(win, "_title_icon_ref", _TITLE_ICON_CACHE["img"])  # evitar GC
+                return
+            except Exception:
+                pass
+        # Fallback a .ico si está disponible
+        ico_path = os.path.splitext(TITLE_ICON_PATH)[0] + ".ico"
+        if os.path.exists(ico_path):
+            try:
+                win.iconbitmap(ico_path)
+            except Exception:
+                pass
+    except Exception:
+        # No romper la UI si el icono falla
+        pass
 
 
 # ==============================
@@ -391,6 +424,12 @@ def setup_style(root):
     except Exception:
         pass
 
+    # Aplicar icono de barra de título si es posible
+    try:
+        set_window_icon(root)
+    except Exception:
+        pass
+
 
 # Corrección simple de textos con tildes mal codificadas (mojibake)
 def fix_text_encoding(s: str) -> str:
@@ -409,6 +448,19 @@ def fix_text_encoding(s: str) -> str:
 def auto_ajustar_altura(*args, **kwargs):
     # Desactivado por solicitud: mantenemos firma por compatibilidad
     return
+
+
+# Texto amigable para días restantes (evita negativos)
+def format_dias_display(dias: int) -> str:
+    try:
+        d = int(dias)
+    except Exception:
+        return str(dias)
+    if d <= 0:
+        n = abs(d)
+        suf = "día" if n == 1 else "días"
+        return f"Contraseña expirada (hace {n} {suf})"
+    return str(d)
 
 
 # ==============================
@@ -445,15 +497,21 @@ def make_treeview_standard(tree: ttk.Treeview, cols: tuple, item_to_user: dict, 
     def _value_for_sort(iid, col):
         val = tree.set(iid, col)
         col_lower = str(col).lower()
-        # Días -> int
+        user = item_to_user.get(iid)
+        # Días -> usar valor numérico real del usuario si existe
         if "día" in col_lower:
             try:
+                if user is not None and isinstance(user.get("dias"), int):
+                    return user.get("dias")
                 return int(str(val).strip())
             except Exception:
                 return float("inf")
-        # Fecha -> datetime
+        # Fecha -> datetime (preferir campo del usuario)
         if "fecha" in col_lower:
-            dt = _parse_date_ddmmyyyy(str(val))
+            if user is not None and user.get("expira"):
+                dt = _parse_date_ddmmyyyy(str(user.get("expira")))
+            else:
+                dt = _parse_date_ddmmyyyy(str(val))
             return dt or datetime.max
         # default: string casefold
         return str(val).casefold()
@@ -605,9 +663,20 @@ def export_tree_to_excel(parent_window, tree: ttk.Treeview, titulo: str = "Repor
 
     # Calcular resumen por categorías a partir de "Días restantes"
     def _parse_int_safe(v):
+        """Devuelve entero si es posible. Acepta también el formato amigable
+        'Contraseña expirada (hace X días)'."""
         try:
             return int(str(v).strip())
         except Exception:
+            try:
+                s = str(v).lower()
+                if "expirada" in s and "hace" in s:
+                    import re
+                    m = re.search(r"hace\s+(\d+)\s+d[ií]a", s)
+                    if m:
+                        return -int(m.group(1))
+            except Exception:
+                pass
             return None
 
     dias_col_idx = None
@@ -717,10 +786,16 @@ def export_tree_to_excel(parent_window, tree: ttk.Treeview, titulo: str = "Repor
     data_start = header_row + 1
     for i, r in enumerate(rows, start=data_start):
         for j, v in enumerate(r, start=1):
-            cell = ws.cell(row=i, column=j, value=v)
+            header = headers[j-1].lower()
+            # Si es columna de días y el valor es el texto amigable, conviértelo a número
+            val_to_write = v
+            if "día" in header:
+                conv = _parse_int_safe(v)
+                if conv is not None:
+                    val_to_write = conv
+            cell = ws.cell(row=i, column=j, value=val_to_write)
             cell.border = borde
             # Alinear ciertas columnas
-            header = headers[j-1].lower()
             if "día" in header:
                 cell.alignment = Alignment(horizontal="center")
             elif "fecha" in header:
@@ -1515,7 +1590,8 @@ def abrir_usuarios_proximos(parent_win, conn):
     win = tk.Toplevel()
     win.title("Usuarios próximos a expirar")
     setup_style(win)
-    centrar_ventana(win, 980, 540)
+    # Ventana más ancha por defecto para acomodar frases largas en "Días restantes"
+    centrar_ventana(win, 1200, 560)
     try:
         win.minsize(900, 520)
     except Exception:
@@ -1539,7 +1615,7 @@ def abrir_usuarios_proximos(parent_win, conn):
         if c == "Sel":
             tree.column(c, width=60, anchor="center")
         elif c == "Días restantes":
-            tree.column(c, width=110, anchor="center")
+            tree.column(c, width=300, anchor="center")
         else:
             tree.column(c, width=150, anchor="w")
     tree.pack(side="top", fill="both", expand=True)
@@ -1717,27 +1793,21 @@ def abrir_dashboard(parent_win, conn):
     tree_top = ttk.Treeview(bottom, columns=cols_top, show="headings", height=6)
     for c in cols_top:
         anchor = "center" if c == "Días" else "w"
-        width = 70 if c == "Días" else 160
+        # Ancho amplio para mostrar texto completo como
+        # "Contraseña expirada (hace X días)"
+        width = 300 if c == "Días" else 160
         tree_top.heading(c, text=c)
         tree_top.column(c, width=width, anchor=anchor)
     tree_top.pack(side="left", fill="both", expand=True)
     sb = ttk.Scrollbar(bottom, orient="vertical", command=tree_top.yview)
     tree_top.configure(yscrollcommand=sb.set)
     sb.pack(side="left", fill="y")
-
-    # Doble clic en Top 10 → propiedades
-    def on_top_dclick(event):
-        iid = tree_top.focus()
-        if not iid:
-            return
-        u = tree_top.item(iid, "values")
-        # map values to user by sAMAccountName
-        usuario = u[0]
-        for obj in all_users:
-            if obj.get("usuario") == usuario:
-                ver_propiedades_usuario(win, conn, obj)
-                break
-    tree_top.bind("<Double-1>", on_top_dclick)
+    # Comportamiento estándar para Top 10: ordenar por encabezados y doble clic abre propiedades
+    seleccion_top = {}
+    item_to_user_top = {}
+    def _ver_props_top(u):
+        ver_propiedades_usuario(win, conn, u)
+    make_treeview_standard(tree_top, cols_top, item_to_user_top, _ver_props_top, seleccion_top)
 
     # Utilidades de cálculo
     def _split_estado(lista):
@@ -1821,9 +1891,20 @@ def abrir_dashboard(parent_win, conn):
         # Top 10 urgentes
         for iid in tree_top.get_children():
             tree_top.delete(iid)
+        seleccion_top.clear()
+        item_to_user_top.clear()
         urg = sorted([u for u in data_all if u.get("dias") is not None], key=lambda x: x["dias"])[:10]
         for u in urg:
-            tree_top.insert("", "end", values=(u.get("usuario"), u.get("nombre"), u.get("departamento"), u.get("dias"), u.get("expira")))
+            vals = (
+                u.get("usuario"),
+                u.get("nombre"),
+                u.get("departamento"),
+                format_dias_display(u.get("dias")),
+                u.get("expira"),
+            )
+            iid = tree_top.insert("", "end", values=vals)
+            seleccion_top[iid] = False
+            item_to_user_top[iid] = u
 
     # Eventos de filtros (debounce suave)
     pending = {"id": None}
@@ -1869,7 +1950,8 @@ def abrir_dashboard(parent_win, conn):
             if c == "Sel":
                 tree.column(c, width=60, anchor="center")
             elif c == "Días restantes":
-                tree.column(c, width=120, anchor="center")
+                # Ensanchar para mostrar el texto completo
+                tree.column(c, width=300, anchor="center")
             else:
                 tree.column(c, width=140, anchor="w")
         tree.pack(fill="both", expand=True)
@@ -1885,7 +1967,7 @@ def abrir_dashboard(parent_win, conn):
             item_to_user.clear()
             for u in datos:
                 iid = tree.insert("", "end", values=("☐", u["usuario"], u["nombre"], u["correo"],
-                                                     u["departamento"], u.get("dias","-"), u.get("expira","-")))
+                                                     u["departamento"], format_dias_display(u.get("dias","-")), u.get("expira","-")))
                 seleccion[iid] = False
                 item_to_user[iid] = u
 
@@ -1950,6 +2032,20 @@ def abrir_dashboard(parent_win, conn):
 
             ttk.Button(btns, text="Enviar correos a todos", command=enviar_todos).pack(side="left", padx=6)
             ttk.Button(btns, text="Enviar correos seleccionados", command=enviar_seleccionados).pack(side="left", padx=6)
+
+            # Ajuste dinámico del tamaño de la ventana de categoría para acomodar columnas anchas
+            try:
+                modal.update_idletasks()
+                scr_w = modal.winfo_screenwidth()
+                scr_h = modal.winfo_screenheight()
+                req_w = modal.winfo_reqwidth()
+                req_h = modal.winfo_reqheight()
+                target_w = min(max(1100, req_w + 20), scr_w - 60)
+                target_h = min(max(560, req_h + 10), scr_h - 120)
+                centrar_ventana(modal, target_w, target_h)
+                modal.minsize(min(target_w, scr_w - 100), min(target_h, scr_h - 120))
+            except Exception:
+                pass
 
 
 
@@ -2332,7 +2428,7 @@ def ver_propiedades_usuario(parent_win, conn, usuario_dict: dict):
             add_row(row, "Oficina", office); row += 1
         if desc:
             add_row(row, "Descripción", desc); row += 1
-        add_row(row, "Días restantes", str(dias)); row += 1
+        add_row(row, "Días restantes", format_dias_display(dias)); row += 1
         add_row(row, "Ingreso", ingreso_str); row += 1
         if last_logon_dt:
             add_row(row, "Último inicio sesión", last_logon_dt.strftime("%d/%m/%Y %H:%M")); row += 1
@@ -2419,7 +2515,9 @@ def abrir_busqueda_usuario(parent_win, conn):
         tree.heading(c, text=c)
         if c == "Sel":
             tree.column(c, width=60, anchor="center")
-        elif c in ("Días restantes", "Fecha de expiración"):
+        elif c == "Días restantes":
+            tree.column(c, width=300, anchor="center")
+        elif c == "Fecha de expiración":
             tree.column(c, width=130, anchor="center")
         else:
             tree.column(c, width=160, anchor="w")
@@ -2434,7 +2532,7 @@ def abrir_busqueda_usuario(parent_win, conn):
         seleccion.clear()
         item_to_user.clear()
         for u in datos:
-            vals = ("☐", u["usuario"], u["nombre"], u["correo"], u["departamento"], str(u["dias"]), u["expira"]) 
+            vals = ("☐", u["usuario"], u["nombre"], u["correo"], u["departamento"], format_dias_display(u["dias"]), u["expira"]) 
             iid = tree.insert("", "end", values=vals)
             seleccion[iid] = False
             item_to_user[iid] = u
@@ -2491,6 +2589,20 @@ def abrir_busqueda_usuario(parent_win, conn):
     # Atajos: Enter para buscar, Escape para limpiar
     entrada.bind("<Return>", lambda e: realizar_busqueda())
     win.bind("<Escape>", lambda e: (entrada.delete(0, tk.END), insertar_datos([]), status_lbl.config(text="")))
+
+    # Ajuste dinámico del tamaño de la ventana para acomodar la columna "Días restantes"
+    try:
+        win.update_idletasks()
+        scr_w = win.winfo_screenwidth()
+        scr_h = win.winfo_screenheight()
+        req_w = win.winfo_reqwidth()
+        req_h = win.winfo_reqheight()
+        target_w = min(max(1180, req_w + 20), scr_w - 60)
+        target_h = min(max(600, req_h + 10), scr_h - 120)
+        centrar_ventana(win, target_w, target_h)
+        win.minsize(min(target_w, scr_w - 100), min(target_h, scr_h - 120))
+    except Exception:
+        pass
 
 # ==============================
 # PUNTO DE ENTRADA

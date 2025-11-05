@@ -4,7 +4,7 @@
 
 # 🔐 AD Password Expiry Notifier
 
-Notificador de expiración de contraseñas de Active Directory (versión 5.0)
+Notificador de expiración de contraseñas de Active Directory (versión 6.0)
 
 <p align="center">
 	<a href="https://www.python.org/"><img alt="Python" src="https://img.shields.io/badge/Python-3.8%2B-3776AB?logo=python&logoColor=white"></a>
@@ -20,7 +20,7 @@ Aplicación de escritorio en Python que consulta Active Directory, muestra el es
 
 ## Índice
 
-- [Novedades v5.0](#novedades-v50)
+- [Novedades v6.0](#novedades-v60)
 - [Características](#características)
 - [Requisitos](#requisitos)
 - [Instalación](#instalación)
@@ -36,22 +36,22 @@ Aplicación de escritorio en Python que consulta Active Directory, muestra el es
 
 ---
 
-## Novedades v5.0
+## Novedades v6.0
 
-- Dashboard V2 con mayor interactividad:
-	- Filtros vivos por estado (Bien/Próximos/Expirados) y por rango de días (-30 a 90).
-	- Gráfico dona con drill‑down por clic y tooltips al pasar el mouse.
-	- Histograma de “días restantes”.
-	- Top 10 usuarios más urgentes (doble clic abre propiedades).
-	- Acceso rápido “Abrir vista filtrada” y fila de botones fija al fondo.
-- Exportación a Excel “Resumen” reforzada:
-	- Logo con reescalado nítido (Pillow LANCZOS) y títulos reubicados.
-	- KPIs tipo “cards”, gráfico de dona, porcentajes con barras de datos y enlace a “Datos”.
-	- Tabla de Top departamentos y “Top 10 más urgentes”.
-	- Nota explicativa y auto‑ajuste de anchos.
-- Envío de correos flexible: selector de método (Outlook o SMTP) con opción “Enviar como”.
-- Búsqueda global en AD por nombre, usuario o correo (amplia y rápida).
-- Estilo visual consolidado (ttk/clam) con textos legibles.
+Comparado con la versión 5.0:
+
+- Experiencia de tablas mejorada
+	- “Días/Días restantes” ahora muestra texto amigable: “Contraseña expirada (hace X días)”.
+	- Se amplió el ancho visual de la columna “Días/Días restantes” en todas las vistas y las ventanas se auto‑ajustan para que el texto se vea completo de inmediato.
+	- El Top 10 del Dashboard ahora es ordenable por encabezados (incluye orden correcto por valor numérico real y fecha), manteniendo el doble clic a propiedades.
+- Exportación a Excel más inteligente
+	- El exportador reconoce el texto amigable de “Días” y lo interpreta como número para KPIs, formato condicional y cálculos; en la hoja “Datos” la columna queda numérica.
+- Icono de la barra de título
+	- Nuevo icono configurable para todas las ventanas (cargado desde `TITLE_ICON_PATH`) con caché y fallback a .ico.
+- Pulidos de UI
+	- Ajustes de tamaño inicial y mínimos para evitar que se esconda la botonera y asegurar buena lectura.
+
+Las mejoras de la v5.0 se mantienen: Dashboard interactivo con dona y drill‑down, histograma, filtros vivos, KPIs, exportación “Resumen” con estilo corporativo, y selector de envío (Outlook/SMTP).
 
 ---
 
@@ -107,6 +107,7 @@ Ajusta los valores del archivo `principal_v4.py` según tu entorno:
 	- `IMG_PATH` (imagen de instrucciones para el correo)
 	- `LOGO_PATH` (logo para Excel)
 	- `FAREWELL_LOGO_PATH` (logo de despedida)
+	- `TITLE_ICON_PATH` (icono para la barra de título de todas las ventanas)
 
 > Nota: el remitente y su contraseña NO están en el código. Se solicitarán al enviar correos y, si lo decides, se recordarán únicamente durante la sesión actual.
 
@@ -171,6 +172,7 @@ Se incluye `principal_v4.spec`. Puedes usarlo o ejecutar un comando equivalente.
 - `img_teclas.png` → insertada en el correo como imagen en línea.
 - `logo_capual_antiguo.png` → insertado en Excel (Datos/Resumen).
 - `kuriboh_logo_despedida.png` → mostrado en la ventana de despedida.
+- `icono_barra_title_*.png` → icono de barra de título (controlado por `TITLE_ICON_PATH`).
 
 Coloca estos archivos junto al ejecutable o al script principal.
 
@@ -189,7 +191,7 @@ Coloca estos archivos junto al ejecutable o al script principal.
 
 - Autor: **Eduardo “PaladynamoX” Lizama C.** — GitHub: [@Paladynamo](https://github.com/Paladynamo)
 - Organización: **Cooperativa Capual – Departamento de Soporte TI**
-- Versión de la app: **5.0.0 (2025)**
+- Versión de la app: **6.0.0 (2025)**
 - Contacto: **eduardo.1994.arte@gmail.com**
 
 > ¿Te fue útil? ⭐ ¡Apoya el proyecto con una estrella!
